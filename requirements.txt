@@ -1,0 +1,30 @@
+# Core
+python-dotenv==1.1.0
+pydantic==2.11.4
+
+# IFC Parsing
+ifcopenshell==0.8.1
+
+# AI / Agents
+anthropic==0.52.0
+langgraph==0.4.1
+
+# Data
+numpy==2.2.6
+
+# Reports
+openpyxl==3.1.5
+Jinja2==3.1.6
+
+# API
+fastapi==0.115.12
+uvicorn==0.34.3
+python-multipart==0.0.20
+
+# Testing
+pytest==8.4.0
+pytest-asyncio==1.0.0
+
+# Utilities
+rich==14.0.0
+loguru==0.7.3
