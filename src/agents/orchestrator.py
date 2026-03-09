@@ -21,13 +21,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from pathlib import Path
+
 from src.agents.base_agent import BaseAgent
 from src.agents.ifc_parser import IFCParserAgent
 from src.agents.classifier import ClassifierAgent
 from src.agents.calculator import CalculatorAgent
 from src.agents.material_mapper import MaterialMapperAgent
+from src.agents.boq_generator import BOQGeneratorAgent
 from src.agents.validator import ValidatorAgent
 from src.models.project import ProcessingStatus
+from src.services.export_service import ExportService
 from src.utils.logger import get_logger
 
 logger = get_logger("orchestrator")
@@ -46,7 +50,9 @@ class Orchestrator(BaseAgent):
         self.classifier = ClassifierAgent()
         self.calculator = CalculatorAgent()
         self.material_mapper = MaterialMapperAgent()
+        self.boq_generator = BOQGeneratorAgent()
         self.validator = ValidatorAgent()
+        self.export_service = ExportService()
 
     async def run(
         self, ifc_file_path: str, config: dict[str, Any] | None = None
@@ -92,6 +98,7 @@ class Orchestrator(BaseAgent):
             ("Classification", self.classifier),
             ("Quantity Calculation", self.calculator),
             ("Material Mapping", self.material_mapper),
+            ("BOQ Generation", self.boq_generator),
             ("Validation", self.validator),
         ]
 
@@ -111,6 +118,40 @@ class Orchestrator(BaseAgent):
                 self.log_error(f"Pipeline stopped at {step_name} due to errors")
                 break
 
+        # Export reports if pipeline succeeded and BOQ was generated
+        if state.get("boq_data") and state.get("status") != ProcessingStatus.FAILED:
+            self.log("Exporting reports...")
+            try:
+                ifc_name = Path(state["ifc_file_path"]).stem
+                output_dir = Path("output") / ifc_name
+                output_dir.mkdir(parents=True, exist_ok=True)
+
+                # Excel
+                excel_path = self.export_service.export_excel(
+                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.xlsx"
+                )
+                state["boq_file_paths"]["xlsx"] = str(excel_path)
+
+                # CSV
+                csv_path = self.export_service.export_csv(
+                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.csv"
+                )
+                state["boq_file_paths"]["csv"] = str(csv_path)
+
+                # JSON
+                json_path = self.export_service.export_json(
+                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.json"
+                )
+                state["boq_file_paths"]["json"] = str(json_path)
+
+                self.log(f"Reports saved to: {output_dir}")
+                state["processing_log"].append(
+                    f"Export: Excel, CSV, JSON saved to {output_dir}"
+                )
+            except Exception as e:
+                self.log_error(f"Export failed: {e}")
+                state["warnings"].append(f"Report export failed: {e}")
+
         # Final summary
         self.log("=" * 50)
         if state["status"] == ProcessingStatus.COMPLETED:
@@ -118,7 +159,7 @@ class Orchestrator(BaseAgent):
         else:
             self.log(f"Pipeline ended with status: {state['status']}")
 
-        self.log(f"Processing log:")
+        self.log("Processing log:")
         for entry in state.get("processing_log", []):
             self.log(f"  - {entry}")
         self.log("=" * 50)
