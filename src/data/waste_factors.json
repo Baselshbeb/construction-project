@@ -1,0 +1,62 @@
+{
+  "concrete": {
+    "standard": 0.05,
+    "pumped": 0.03,
+    "foundation": 0.07,
+    "description": "Concrete waste due to spillage, over-ordering, formwork gaps"
+  },
+  "reinforcement_steel": {
+    "standard": 0.03,
+    "complex_shapes": 0.05,
+    "description": "Rebar waste from cutting, bending, lapping"
+  },
+  "formwork": {
+    "standard": 0.10,
+    "reusable": 0.05,
+    "description": "Formwork panels - some damaged, some reused"
+  },
+  "bricks": {
+    "standard": 0.05,
+    "curved_walls": 0.10,
+    "description": "Breakage during transport and laying"
+  },
+  "mortar": {
+    "standard": 0.10,
+    "description": "Mortar waste from mixing and application"
+  },
+  "plaster": {
+    "internal": 0.10,
+    "external": 0.12,
+    "description": "Plaster waste from application and drying"
+  },
+  "paint": {
+    "standard": 0.10,
+    "description": "Paint waste from roller/brush application"
+  },
+  "tiles": {
+    "standard": 0.10,
+    "diagonal_pattern": 0.15,
+    "description": "Tile cutting waste at edges and corners"
+  },
+  "waterproofing": {
+    "standard": 0.10,
+    "description": "Membrane overlaps and cutting waste"
+  },
+  "insulation": {
+    "standard": 0.05,
+    "description": "Cutting waste at edges and around openings"
+  },
+  "screed": {
+    "standard": 0.08,
+    "description": "Floor screed waste from leveling"
+  },
+  "timber": {
+    "formwork": 0.15,
+    "structural": 0.05,
+    "description": "Timber cutting waste"
+  },
+  "glass": {
+    "standard": 0.02,
+    "description": "Very low waste - cut to order"
+  }
+}

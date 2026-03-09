@@ -1,0 +1,88 @@
+{
+  "_description": "Maps building element types to their required construction materials. Each material specifies the source quantity to use and any multipliers.",
+
+  "IfcWall": {
+    "concrete_external": {
+      "condition": {"is_external": true, "material_contains": "concrete"},
+      "materials": [
+        {"name": "Concrete C25/30", "unit": "m3", "source": "Wall volume", "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Wall volume", "multiplier": 80, "waste": "reinforcement_steel.standard", "note": "~80 kg/m3 for structural walls"},
+        {"name": "Formwork (wall)", "unit": "m2", "source": "Gross wall area (one side)", "multiplier": 2, "waste": "formwork.standard", "note": "Both sides of wall"},
+        {"name": "External plaster (cement render)", "unit": "m2", "source": "External face area (for ext. plaster/paint)", "waste": "plaster.external"},
+        {"name": "Internal plaster", "unit": "m2", "source": "Internal face area (for plaster/paint)", "waste": "plaster.internal"},
+        {"name": "External paint", "unit": "m2", "source": "External face area (for ext. plaster/paint)", "waste": "paint.standard"},
+        {"name": "Internal paint", "unit": "m2", "source": "Internal face area (for plaster/paint)", "waste": "paint.standard"}
+      ]
+    },
+    "brick_internal": {
+      "condition": {"is_external": false},
+      "materials": [
+        {"name": "Clay bricks (standard)", "unit": "nr", "source": "Net wall area (minus openings, one side)", "multiplier": 50, "waste": "bricks.standard", "note": "~50 bricks per m2 for 100mm wall"},
+        {"name": "Mortar (brick laying)", "unit": "m3", "source": "Net wall area (minus openings, one side)", "multiplier": 0.03, "waste": "mortar.standard", "note": "~0.03 m3 per m2"},
+        {"name": "Internal plaster (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "plaster.internal"},
+        {"name": "Internal paint (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "paint.standard"}
+      ]
+    },
+    "concrete_internal": {
+      "condition": {"is_external": false, "material_contains": "concrete"},
+      "materials": [
+        {"name": "Concrete C25/30", "unit": "m3", "source": "Wall volume", "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Wall volume", "multiplier": 60, "waste": "reinforcement_steel.standard"},
+        {"name": "Formwork (wall)", "unit": "m2", "source": "Gross wall area (one side)", "multiplier": 2, "waste": "formwork.standard"},
+        {"name": "Internal plaster (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "plaster.internal"},
+        {"name": "Internal paint (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "paint.standard"}
+      ]
+    }
+  },
+
+  "IfcSlab": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Slab volume", "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Slab volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for slabs"},
+        {"name": "Formwork (slab)", "unit": "m2", "source": "Formwork area (soffit + edges)", "waste": "formwork.standard"},
+        {"name": "Floor screed (50mm)", "unit": "m2", "source": "Slab area (top face)", "waste": "screed.standard"},
+        {"name": "Ceiling plaster (soffit)", "unit": "m2", "source": "Slab area (bottom face / soffit)", "waste": "plaster.internal"}
+      ]
+    }
+  },
+
+  "IfcColumn": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Column volume", "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Column volume", "multiplier": 150, "waste": "reinforcement_steel.standard", "note": "~150 kg/m3 for columns"},
+        {"name": "Formwork (column)", "unit": "m2", "source": "Column surface area (for formwork/plaster)", "waste": "formwork.standard"}
+      ]
+    }
+  },
+
+  "IfcBeam": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Beam volume", "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Beam volume", "multiplier": 120, "waste": "reinforcement_steel.standard", "note": "~120 kg/m3 for beams"},
+        {"name": "Formwork (beam)", "unit": "m2", "source": "Beam surface area (for formwork)", "waste": "formwork.standard"}
+      ]
+    }
+  },
+
+  "IfcDoor": {
+    "standard": {
+      "materials": [
+        {"name": "Door leaf (complete)", "unit": "nr", "source": "Door count", "waste_value": 0},
+        {"name": "Door frame", "unit": "nr", "source": "Door count", "waste_value": 0},
+        {"name": "Door hardware (handle, lock, hinges)", "unit": "set", "source": "Door count", "waste_value": 0}
+      ]
+    }
+  },
+
+  "IfcWindow": {
+    "standard": {
+      "materials": [
+        {"name": "Window unit (complete, double glazed)", "unit": "nr", "source": "Window count", "waste_value": 0},
+        {"name": "Window sill (marble/stone)", "unit": "m", "source": "Window sill length", "waste": "tiles.standard"}
+      ]
+    }
+  }
+}
