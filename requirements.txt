@@ -1,6 +1,7 @@
 # Core
 python-dotenv==1.1.0
 pydantic==2.11.4
+pydantic-settings==2.13.1
 
 # IFC Parsing
 ifcopenshell==0.8.1

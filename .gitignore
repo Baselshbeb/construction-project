@@ -40,4 +40,5 @@ output/
 *.pdf
 
 # Logs
+logs/
 *.log
