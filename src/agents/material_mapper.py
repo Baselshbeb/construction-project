@@ -1,14 +1,13 @@
 """
-Material Mapper Agent - maps building elements to specific construction materials.
+Material Mapper Agent - maps building elements to construction materials using
+Claude AI.
 
 Coach Simple explains:
     "We know we have a concrete external wall with 30 m2 of area and 6 m3
-    of volume. But WHAT materials do we need to BUILD it? This agent figures
-    that out: 6.3 m3 concrete, 504 kg steel, 63 m2 formwork, 30 m2 plaster,
-    30 m2 paint... It's the brain that turns measurements into a shopping list."
-
-This agent uses RULE-BASED mapping from element_rules.json for standard cases.
-For complex/ambiguous elements, it can fall back to AI (Claude API).
+    of volume. But WHAT materials do we need to BUILD it? We ask Claude -
+    who knows construction engineering deeply - to figure out the shopping
+    list: concrete, steel, formwork, plaster, paint... Claude handles ANY
+    building type, not just the simple ones our rules cover."
 
 Pipeline position: FOURTH agent (after Calculator)
 Input: ProjectState with calculated_quantities
@@ -18,11 +17,17 @@ Output: ProjectState with material_list filled in
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from src.agents.base_agent import BaseAgent
 from src.models.project import ProcessingStatus
+from src.prompts.material_mapper_prompts import (
+    build_mapper_message,
+    get_mapper_system_prompt,
+)
+from src.services.llm_service import LLMService
 from src.utils.logger import get_logger
 
 logger = get_logger("material_mapper")
@@ -40,19 +45,25 @@ def _load_json(filename: str) -> dict:
 
 
 class MaterialMapperAgent(BaseAgent):
-    """Maps building elements to construction materials using rules + AI."""
+    """Maps building elements to construction materials using AI."""
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService | None = None):
         super().__init__(
             name="material_mapper",
-            description="Maps element quantities to specific construction materials",
+            description="Maps element quantities to specific construction materials using AI",
         )
+        self.llm = llm_service or LLMService()
         self.waste_factors = _load_json("waste_factors.json")
         self.element_rules = _load_json("element_rules.json")
 
+        # Build the system prompt with reference data injected
+        self.system_prompt = get_mapper_system_prompt(
+            self.waste_factors, self.element_rules
+        )
+
     async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Map all elements to their required materials."""
-        self.log("Starting material mapping...")
+        """Map all elements to their required materials using AI."""
+        self.log("Starting AI material mapping...")
         state["status"] = ProcessingStatus.MAPPING_MATERIALS
         state["current_step"] = "Mapping materials"
 
@@ -68,102 +79,109 @@ class MaterialMapperAgent(BaseAgent):
         for cq in calc_quantities:
             qty_lookup[cq["element_id"]] = cq["quantities"]
 
-        # Map each element to materials
+        # Group elements by IFC type for batching
+        batches = self._group_by_type(elements)
+
         all_materials: list[dict[str, Any]] = []
+        total_batches = len(batches)
 
-        for element in elements:
-            elem_id = element["ifc_id"]
-            elem_quantities = qty_lookup.get(elem_id, [])
+        for i, (type_name, batch_elements) in enumerate(batches.items()):
+            self.log(f"  Mapping batch {i + 1}/{total_batches}: {type_name} ({len(batch_elements)} elements)")
 
-            materials = self._map_element(element, elem_quantities)
-            all_materials.extend(materials)
+            # Build enriched element data with quantities attached
+            enriched = []
+            for elem in batch_elements:
+                enriched.append({
+                    "element_id": elem["ifc_id"],
+                    "ifc_type": elem["ifc_type"],
+                    "name": elem.get("name"),
+                    "is_external": elem.get("is_external"),
+                    "category": elem.get("category"),
+                    "ifc_materials": elem.get("materials", []),
+                    "quantities": qty_lookup.get(elem["ifc_id"], []),
+                })
 
-        # Aggregate: combine same materials across all elements
+            user_message = build_mapper_message(enriched)
+
+            try:
+                ai_result = await self.llm.ask_json(
+                    system_prompt=self.system_prompt,
+                    user_message=user_message,
+                    temperature=0.0,
+                    max_tokens=8192,
+                )
+            except Exception as e:
+                self.log_error(f"AI mapping failed for {type_name}: {e}")
+                state["warnings"].append(
+                    f"AI material mapping failed for {type_name}: {e}"
+                )
+                continue
+
+            # Process AI response
+            for elem_result in ai_result.get("elements", []):
+                materials = self._process_ai_materials(
+                    elem_result, qty_lookup, elements
+                )
+                all_materials.extend(materials)
+
+        # Aggregate same materials across all elements
         aggregated = self._aggregate_materials(all_materials)
 
         state["material_list"] = aggregated
 
-        self.log(f"Mapped {len(all_materials)} material items, aggregated to {len(aggregated)} unique materials")
+        self.log(
+            f"AI mapped {len(all_materials)} material items, "
+            f"aggregated to {len(aggregated)} unique materials"
+        )
         state["processing_log"].append(
-            f"Material Mapper: mapped {len(elements)} elements to {len(aggregated)} unique materials"
+            f"Material Mapper: AI mapped {len(elements)} elements "
+            f"to {len(aggregated)} unique materials"
         )
 
         return state
 
-    def _map_element(
-        self, element: dict[str, Any], quantities: list[dict[str, Any]]
+    def _group_by_type(
+        self, elements: list[dict[str, Any]]
+    ) -> dict[str, list[dict]]:
+        """Group elements by IFC type for batch API calls."""
+        groups: dict[str, list[dict]] = defaultdict(list)
+        for elem in elements:
+            groups[elem.get("ifc_type", "Unknown")].append(elem)
+        return dict(groups)
+
+    def _process_ai_materials(
+        self,
+        elem_result: dict[str, Any],
+        qty_lookup: dict[int, list[dict]],
+        all_elements: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        """Map a single element to its required materials using rules."""
-        ifc_type = element.get("ifc_type", "")
-        is_external = element.get("is_external", False)
-        materials_from_ifc = element.get("materials", [])
-
-        # Get rules for this element type
-        type_rules = self.element_rules.get(ifc_type, {})
-        if not type_rules:
-            # No rules for this type - skip
+        """Convert AI response for one element into material dicts."""
+        elem_id = elem_result.get("element_id")
+        if elem_id is None:
             return []
 
-        # Find the best matching rule variant
-        rule_variant = self._find_matching_rule(
-            type_rules, is_external, materials_from_ifc
-        )
-        if not rule_variant:
+        # Find the element to get its category
+        element = None
+        for e in all_elements:
+            if e["ifc_id"] == elem_id:
+                element = e
+                break
+        if not element:
             return []
 
-        # Build quantity lookup: description -> value
-        qty_lookup: dict[str, float] = {}
+        # Build quantity lookup for this element
+        quantities = qty_lookup.get(elem_id, [])
+        qty_map: dict[str, float] = {}
         for q in quantities:
-            qty_lookup[q["description"]] = q["quantity"]
+            qty_map[q["description"]] = q["quantity"]
 
-        # Apply each material rule
         result = []
-        for mat_rule in rule_variant.get("materials", []):
-            material = self._apply_material_rule(
-                mat_rule, qty_lookup, element
-            )
+        for mat_rule in elem_result.get("materials", []):
+            material = self._apply_material_rule(mat_rule, qty_map, element)
             if material:
                 result.append(material)
 
         return result
-
-    def _find_matching_rule(
-        self,
-        type_rules: dict,
-        is_external: bool | None,
-        materials_from_ifc: list[str],
-    ) -> dict | None:
-        """Find the best matching rule variant for an element."""
-        # Remove the description key if present
-        variants = {k: v for k, v in type_rules.items() if k != "_description"}
-
-        if not variants:
-            return None
-
-        # If there's only one variant (like "standard"), use it
-        if len(variants) == 1:
-            return next(iter(variants.values()))
-
-        # Try to match conditions
-        materials_lower = " ".join(materials_from_ifc).lower()
-
-        for variant_name, variant in variants.items():
-            condition = variant.get("condition", {})
-
-            # Check is_external condition
-            if "is_external" in condition:
-                if condition["is_external"] != is_external:
-                    continue
-
-            # Check material_contains condition
-            if "material_contains" in condition:
-                if condition["material_contains"].lower() not in materials_lower:
-                    continue
-
-            return variant
-
-        # No condition matched - return first variant as fallback
-        return next(iter(variants.values()))
 
     def _apply_material_rule(
         self,
@@ -171,7 +189,7 @@ class MaterialMapperAgent(BaseAgent):
         qty_lookup: dict[str, float],
         element: dict[str, Any],
     ) -> dict[str, Any] | None:
-        """Apply a single material rule to produce a material item."""
+        """Apply a single material rule from AI response to produce a material item."""
         name = rule.get("name", "Unknown material")
         unit = rule.get("unit", "nr")
         source_desc = rule.get("source", "")
@@ -196,7 +214,9 @@ class MaterialMapperAgent(BaseAgent):
 
         # Get waste factor
         waste = 0.0
-        if "waste" in rule:
+        if "waste_key" in rule:
+            waste = self._get_waste_factor(rule["waste_key"])
+        elif "waste" in rule:
             waste = self._get_waste_factor(rule["waste"])
         elif "waste_value" in rule:
             waste = rule["waste_value"]
@@ -215,7 +235,7 @@ class MaterialMapperAgent(BaseAgent):
         }
 
     def _get_waste_factor(self, waste_key: str) -> float:
-        """Look up a waste factor from the waste_factors.json data.
+        """Look up a waste factor from waste_factors.json data.
 
         waste_key format: "concrete.standard" -> waste_factors["concrete"]["standard"]
         """

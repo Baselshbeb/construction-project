@@ -8,9 +8,11 @@ Coach Simple explains:
     It's like test-driving a car after assembling all the parts."
 """
 
+import json
 import tempfile
 import pytest
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.orchestrator import Orchestrator
 from src.models.project import ProcessingStatus
@@ -19,9 +21,152 @@ from src.models.project import ProcessingStatus
 SAMPLE_IFC = Path("tests/fixtures/simple_house.ifc")
 
 
+def _mock_classify(user_message: str) -> dict:
+    """Simulate AI classification based on IFC types."""
+    data = json.loads(user_message)
+    result = {}
+    for elem in data["elements"]:
+        elem_id = str(elem["id"])
+        ifc_type = elem["type"]
+        name = elem.get("name", "").lower()
+        is_external = elem.get("is_external")
+
+        if ifc_type == "IfcDoor":
+            result[elem_id] = "doors"
+        elif ifc_type == "IfcWindow":
+            result[elem_id] = "windows"
+        elif ifc_type in ("IfcColumn", "IfcBeam"):
+            result[elem_id] = "frame"
+        elif ifc_type == "IfcWall":
+            result[elem_id] = "external_walls" if is_external else "internal_walls"
+        elif ifc_type == "IfcSlab":
+            if "ground" in name:
+                result[elem_id] = "substructure"
+            elif "roof" in name:
+                result[elem_id] = "roof"
+            else:
+                result[elem_id] = "upper_floors"
+        else:
+            result[elem_id] = "frame"
+    return result
+
+
+def _mock_map_materials(user_message: str) -> dict:
+    """Simulate AI material mapping based on element types."""
+    data = json.loads(user_message)
+    elements = []
+    for elem in data["elements"]:
+        mats = []
+        ifc_type = elem.get("ifc_type", "")
+        quantities = elem.get("quantities", [])
+
+        # Find volume, area, and count quantities
+        volume_desc = next(
+            (q["description"] for q in quantities if "volume" in q.get("description", "").lower()),
+            None,
+        )
+        area_desc = next(
+            (q["description"] for q in quantities
+             if "area" in q.get("description", "").lower()
+             and "opening" not in q.get("description", "").lower()),
+            None,
+        )
+        formwork_desc = next(
+            (q["description"] for q in quantities if "formwork" in q.get("description", "").lower()),
+            None,
+        )
+        count_desc = next(
+            (q["description"] for q in quantities if "count" in q.get("description", "").lower()),
+            None,
+        )
+
+        if ifc_type in ("IfcWall", "IfcColumn", "IfcBeam", "IfcSlab"):
+            if volume_desc:
+                mats.append({
+                    "name": "Concrete C25/30",
+                    "unit": "m3",
+                    "source": volume_desc,
+                    "multiplier": 1.0,
+                    "waste_key": "concrete.standard",
+                })
+                mats.append({
+                    "name": "Reinforcement steel B500",
+                    "unit": "kg",
+                    "source": volume_desc,
+                    "multiplier": 100.0,
+                    "waste_key": "reinforcement_steel.standard",
+                })
+            if formwork_desc or area_desc:
+                mats.append({
+                    "name": "Formwork",
+                    "unit": "m2",
+                    "source": formwork_desc or area_desc,
+                    "multiplier": 1.0,
+                    "waste_key": "formwork.standard",
+                })
+        elif ifc_type == "IfcDoor":
+            if count_desc:
+                mats.append({
+                    "name": "Internal door unit",
+                    "unit": "nr",
+                    "source": count_desc,
+                    "multiplier": 1.0,
+                    "waste_value": 0.0,
+                })
+        elif ifc_type == "IfcWindow":
+            if count_desc:
+                mats.append({
+                    "name": "Window unit",
+                    "unit": "nr",
+                    "source": count_desc,
+                    "multiplier": 1.0,
+                    "waste_value": 0.0,
+                })
+
+        elements.append({"element_id": elem["element_id"], "materials": mats})
+
+    return {"elements": elements}
+
+
+def _mock_validate(user_message: str) -> dict:
+    """Simulate AI validation response."""
+    return {
+        "overall_assessment": "acceptable",
+        "confidence": 0.85,
+        "summary": "Reasonable BOQ for a residential building",
+        "issues": [],
+    }
+
+
+def _create_mock_llm():
+    """Create a mock LLMService that handles all agent calls."""
+    mock = MagicMock()
+    call_count = {"n": 0}
+
+    async def mock_ask_json(system_prompt, user_message, **kwargs):
+        call_count["n"] += 1
+        prompt_lower = system_prompt.lower()
+        if "classify" in prompt_lower or "classification" in prompt_lower:
+            return _mock_classify(user_message)
+        elif "quantity surveyor" in prompt_lower or "material" in prompt_lower:
+            return _mock_map_materials(user_message)
+        elif "validation" in prompt_lower or "review" in prompt_lower:
+            return _mock_validate(user_message)
+        return {}
+
+    mock.ask_json = AsyncMock(side_effect=mock_ask_json)
+    return mock
+
+
 @pytest.fixture
 def orchestrator():
-    return Orchestrator()
+    orch = Orchestrator()
+    mock_llm = _create_mock_llm()
+    orch.llm_service = mock_llm
+    orch.classifier.llm = mock_llm
+    orch.material_mapper.llm = mock_llm
+    orch.validator.llm = mock_llm
+    return orch
 
 
 @pytest.mark.skipif(not SAMPLE_IFC.exists(), reason="Sample IFC file not found")

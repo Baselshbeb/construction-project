@@ -1,13 +1,15 @@
 """
-Validation Agent - cross-checks all quantities and materials for errors.
+Validation Agent - cross-checks all quantities and materials for errors
+using both arithmetic checks and Claude AI intelligent review.
 
 Coach Simple explains:
     "Before we hand the shopping list to the client, we need someone
-    to double-check it. Does the concrete amount make sense for a
-    building this size? Did we forget any floors? Are there negative
-    numbers? This agent is the quality inspector."
+    to double-check it. First we run quick math checks (any negatives?
+    is the concrete ratio reasonable?). Then we ask Claude - a senior
+    engineer - to review the whole BOQ and spot things math can't catch,
+    like missing waterproofing or contradictory materials."
 
-Pipeline position: LAST agent (after BOQ Generator, or after Material Mapper)
+Pipeline position: LAST agent (after BOQ Generator)
 Input: ProjectState with material_list and calculated_quantities
 Output: ProjectState with validation_report, warnings, errors
 """
@@ -18,16 +20,25 @@ from typing import Any
 
 from src.agents.base_agent import BaseAgent
 from src.models.project import ProcessingStatus
+from src.prompts.validator_prompts import (
+    VALIDATOR_SYSTEM_PROMPT,
+    build_validator_message,
+)
+from src.services.llm_service import LLMService
+from src.utils.logger import get_logger
+
+logger = get_logger("validator")
 
 
 class ValidatorAgent(BaseAgent):
-    """Validates quantities and materials for correctness."""
+    """Validates quantities and materials using arithmetic checks + AI review."""
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService | None = None):
         super().__init__(
             name="validator",
             description="Cross-checks quantities and materials for errors and inconsistencies",
         )
+        self.llm = llm_service or LLMService()
 
     async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
         """Validate the entire pipeline output."""
@@ -95,7 +106,6 @@ class ValidatorAgent(BaseAgent):
             checks["no_negative_quantities"] = True
 
         # --- Check 6: Concrete ratio reasonable ---
-        # Rule of thumb: residential building uses ~0.3-0.5 m3 concrete per m2 floor area
         total_concrete = sum(
             m["total_quantity"]
             for m in materials
@@ -157,6 +167,20 @@ class ValidatorAgent(BaseAgent):
         else:
             checks["steel_ratio_reasonable"] = True
 
+        # --- AI-powered intelligent validation ---
+        ai_assessment = await self._ai_validate(state)
+        if ai_assessment:
+            for issue in ai_assessment.get("issues", []):
+                severity = issue.get("severity", "info")
+                message = issue.get("message", "")
+                if severity == "error":
+                    errors.append(f"[AI Review] {message}")
+                elif severity == "warning":
+                    warnings.append(f"[AI Review] {message}")
+                # "info" level issues logged but not added to warnings
+                else:
+                    self.log(f"  [AI Info] {message}")
+
         # --- Build validation report ---
         passed = sum(1 for v in checks.values() if v)
         total = len(checks)
@@ -176,6 +200,12 @@ class ValidatorAgent(BaseAgent):
             },
         }
 
+        # Add AI assessment to report if available
+        if ai_assessment:
+            validation_report["ai_assessment"] = ai_assessment.get("overall_assessment")
+            validation_report["ai_confidence"] = ai_assessment.get("confidence")
+            validation_report["ai_summary"] = ai_assessment.get("summary")
+
         state["validation_report"] = validation_report
         state["warnings"] = warnings
         state["errors"] = errors
@@ -193,3 +223,33 @@ class ValidatorAgent(BaseAgent):
         )
 
         return state
+
+    async def _ai_validate(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """Run AI-powered intelligent validation on the full BOQ.
+
+        Returns the AI's assessment or None if the call fails.
+        """
+        try:
+            user_message = build_validator_message(
+                elements=state.get("parsed_elements", []),
+                materials=state.get("material_list", []),
+                building_info=state.get("building_info"),
+                boq_data=state.get("boq_data"),
+                calc_quantities=state.get("calculated_quantities"),
+            )
+
+            result = await self.llm.ask_json(
+                system_prompt=VALIDATOR_SYSTEM_PROMPT,
+                user_message=user_message,
+                temperature=0.1,
+            )
+
+            self.log(f"  AI assessment: {result.get('overall_assessment', 'N/A')}")
+            if result.get("summary"):
+                self.log(f"  AI summary: {result['summary']}")
+
+            return result
+
+        except Exception as e:
+            self.log_warning(f"AI validation failed (non-critical): {e}")
+            return None

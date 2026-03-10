@@ -32,6 +32,7 @@ from src.agents.boq_generator import BOQGeneratorAgent
 from src.agents.validator import ValidatorAgent
 from src.models.project import ProcessingStatus
 from src.services.export_service import ExportService
+from src.services.llm_service import LLMService
 from src.utils.logger import get_logger
 
 logger = get_logger("orchestrator")
@@ -45,13 +46,16 @@ class Orchestrator(BaseAgent):
             name="orchestrator",
             description="Coordinates the full IFC-to-BOQ pipeline",
         )
-        # Initialize all agents
+        # Shared LLM service for all AI-powered agents
+        self.llm_service = LLMService()
+
+        # Initialize all agents (AI agents share the same LLM service)
         self.parser = IFCParserAgent()
-        self.classifier = ClassifierAgent()
+        self.classifier = ClassifierAgent(llm_service=self.llm_service)
         self.calculator = CalculatorAgent()
-        self.material_mapper = MaterialMapperAgent()
+        self.material_mapper = MaterialMapperAgent(llm_service=self.llm_service)
         self.boq_generator = BOQGeneratorAgent()
-        self.validator = ValidatorAgent()
+        self.validator = ValidatorAgent(llm_service=self.llm_service)
         self.export_service = ExportService()
 
     async def run(

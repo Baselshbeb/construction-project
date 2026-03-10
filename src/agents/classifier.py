@@ -1,14 +1,12 @@
 """
-Element Classifier Agent - categorizes building elements into BOQ sections.
+Element Classifier Agent - categorizes building elements into BOQ sections
+using Claude AI.
 
 Coach Simple explains:
     "The parser gave us a pile of building pieces. Now we need to SORT them.
-    Is this wall an external wall or an internal partition? Is this slab a
-    ground floor, upper floor, or roof? This agent sorts every piece into
-    the right category so the BOQ is organized properly."
-
-This agent uses rule-based classification first (fast and reliable),
-then falls back to AI for ambiguous elements.
+    We ask Claude - who knows construction inside and out - to look at each
+    piece and tell us which pile it belongs to. Claude can handle even weird
+    elements that simple rules would miss."
 
 Pipeline position: SECOND agent
 Input: ProjectState with parsed_elements
@@ -21,117 +19,39 @@ from typing import Any
 
 from src.agents.base_agent import BaseAgent
 from src.models.project import ElementCategory, ProcessingStatus
+from src.prompts.classifier_prompts import (
+    CLASSIFIER_SYSTEM_PROMPT,
+    build_classifier_message,
+)
+from src.services.llm_service import LLMService
+from src.utils.logger import get_logger
 
+logger = get_logger("classifier")
 
-# ------------------------------------------------------------------
-# Classification rules
-# ------------------------------------------------------------------
-# Coach Simple: "These rules are like a sorting hat. If it's an IfcDoor,
-# it goes in the 'doors' pile. Simple!"
-
-# Direct type-to-category mapping for unambiguous types
-DIRECT_TYPE_MAP: dict[str, ElementCategory] = {
-    "IfcDoor": ElementCategory.DOORS,
-    "IfcWindow": ElementCategory.WINDOWS,
-    "IfcStair": ElementCategory.STAIRS,
-    "IfcStairFlight": ElementCategory.STAIRS,
-    "IfcRamp": ElementCategory.STAIRS,
-    "IfcRampFlight": ElementCategory.STAIRS,
-    "IfcRoof": ElementCategory.ROOF,
-    "IfcCovering": ElementCategory.FINISHES,
-    "IfcRailing": ElementCategory.STAIRS,
-    "IfcCurtainWall": ElementCategory.EXTERNAL_WALLS,
-    "IfcFooting": ElementCategory.SUBSTRUCTURE,
-    "IfcPile": ElementCategory.SUBSTRUCTURE,
-}
-
-
-def _classify_wall(element: dict[str, Any]) -> ElementCategory:
-    """Classify a wall as external or internal."""
-    # Check IsExternal property
-    is_external = element.get("is_external")
-    if is_external is True:
-        return ElementCategory.EXTERNAL_WALLS
-    if is_external is False:
-        return ElementCategory.INTERNAL_WALLS
-
-    # Check property sets
-    props = element.get("properties", {})
-    if props.get("IsExternal") is True:
-        return ElementCategory.EXTERNAL_WALLS
-    if props.get("IsExternal") is False:
-        return ElementCategory.INTERNAL_WALLS
-
-    # Heuristic: check name for clues
-    name = (element.get("name") or "").lower()
-    if any(kw in name for kw in ["external", "exterior", "outer", "facade"]):
-        return ElementCategory.EXTERNAL_WALLS
-    if any(kw in name for kw in ["internal", "interior", "inner", "partition"]):
-        return ElementCategory.INTERNAL_WALLS
-
-    # Heuristic: thicker walls are more likely external
-    quantities = element.get("quantities", {})
-    width = quantities.get("Width", 0)
-    if width >= 0.15:  # 150mm or thicker -> likely external
-        return ElementCategory.EXTERNAL_WALLS
-
-    # Default to external (safer - won't miss materials)
-    return ElementCategory.EXTERNAL_WALLS
-
-
-def _classify_slab(element: dict[str, Any]) -> ElementCategory:
-    """Classify a slab as ground floor, upper floor, or roof."""
-    name = (element.get("name") or "").lower()
-    storey = (element.get("storey") or "").lower()
-
-    # Check name for clues
-    if any(kw in name for kw in ["roof", "terrace", "top"]):
-        return ElementCategory.ROOF
-    if any(kw in name for kw in ["ground", "foundation", "base", "raft"]):
-        return ElementCategory.SUBSTRUCTURE
-
-    # Check storey
-    if any(kw in storey for kw in ["ground", "basement", "sub"]):
-        # Ground floor slab could be substructure
-        # But if it's named just "Ground Floor Slab", it's an upper floor
-        if any(kw in name for kw in ["foundation", "raft", "base"]):
-            return ElementCategory.SUBSTRUCTURE
-
-    return ElementCategory.UPPER_FLOORS
-
-
-def _classify_column(element: dict[str, Any]) -> ElementCategory:
-    """Classify a column - almost always frame."""
-    storey = (element.get("storey") or "").lower()
-    if any(kw in storey for kw in ["basement", "sub"]):
-        return ElementCategory.SUBSTRUCTURE
-    return ElementCategory.FRAME
-
-
-def _classify_beam(element: dict[str, Any]) -> ElementCategory:
-    """Classify a beam - almost always frame."""
-    return ElementCategory.FRAME
+# Valid category values for validation
+VALID_CATEGORIES = {cat.value for cat in ElementCategory}
 
 
 class ClassifierAgent(BaseAgent):
-    """Classifies building elements into BOQ categories."""
+    """Classifies building elements into BOQ categories using AI."""
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService | None = None):
         super().__init__(
             name="classifier",
-            description="Categorizes building elements into BOQ sections",
+            description="Categorizes building elements into BOQ sections using AI",
         )
+        self.llm = llm_service or LLMService()
 
     async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
-        """Classify all parsed elements into categories.
+        """Classify all parsed elements into categories using Claude AI.
 
         Steps:
-        1. Read parsed_elements from state
-        2. Apply classification rules to each element
-        3. Update each element's category
-        4. Build classified_elements index (category -> element IDs)
+        1. Serialize all elements into compact format
+        2. Send to Claude in one batch call
+        3. Parse response and apply categories
+        4. Build classified_elements index
         """
-        self.log("Starting element classification...")
+        self.log("Starting AI element classification...")
         state["status"] = ProcessingStatus.CLASSIFYING
         state["current_step"] = "Classifying elements"
 
@@ -140,23 +60,40 @@ class ClassifierAgent(BaseAgent):
             self.log_warning("No elements to classify!")
             return state
 
+        # Build the prompt message
+        user_message = build_classifier_message(elements)
+
+        # Call Claude AI
+        try:
+            ai_result = await self.llm.ask_json(
+                system_prompt=CLASSIFIER_SYSTEM_PROMPT,
+                user_message=user_message,
+                temperature=0.0,
+            )
+        except Exception as e:
+            self.log_error(f"AI classification failed: {e}")
+            state["warnings"].append(f"AI classification failed: {e}")
+            state["errors"].append("Classification failed - no AI response")
+            return state
+
+        # Apply classifications from AI response
         classified: dict[str, list[int]] = {}
         unclassified = []
 
         for element in elements:
-            category = self._classify_element(element)
+            elem_id = str(element["ifc_id"])
+            category_str = ai_result.get(elem_id)
 
-            if category:
-                element["category"] = category.value
-                cat_key = category.value
-                if cat_key not in classified:
-                    classified[cat_key] = []
-                classified[cat_key].append(element["ifc_id"])
+            if category_str and category_str in VALID_CATEGORIES:
+                element["category"] = category_str
+                if category_str not in classified:
+                    classified[category_str] = []
+                classified[category_str].append(element["ifc_id"])
             else:
                 unclassified.append(element)
                 self.log_warning(
-                    f"Could not classify: {element.get('ifc_type')} "
-                    f"'{element.get('name')}'"
+                    f"AI did not classify: {element.get('ifc_type')} "
+                    f"'{element.get('name')}' (got: {category_str})"
                 )
 
         state["classified_elements"] = classified
@@ -169,41 +106,8 @@ class ClassifierAgent(BaseAgent):
             self.log_warning(f"  unclassified: {len(unclassified)} elements")
 
         state["processing_log"].append(
-            f"Classifier: categorized {len(elements) - len(unclassified)} elements "
+            f"Classifier: AI categorized {len(elements) - len(unclassified)} elements "
             f"into {len(classified)} categories"
         )
 
         return state
-
-    def _classify_element(self, element: dict[str, Any]) -> ElementCategory | None:
-        """Classify a single element using rules."""
-        ifc_type = element.get("ifc_type", "")
-
-        # Direct mapping for simple types
-        if ifc_type in DIRECT_TYPE_MAP:
-            return DIRECT_TYPE_MAP[ifc_type]
-
-        # Type-specific classification logic
-        if ifc_type in ("IfcWall", "IfcWallStandardCase"):
-            return _classify_wall(element)
-
-        if ifc_type == "IfcSlab":
-            return _classify_slab(element)
-
-        if ifc_type == "IfcColumn":
-            return _classify_column(element)
-
-        if ifc_type in ("IfcBeam",):
-            return _classify_beam(element)
-
-        # IfcBuildingElementProxy - catch-all for unrecognized elements
-        if ifc_type == "IfcBuildingElementProxy":
-            self.log_warning(
-                f"IfcBuildingElementProxy '{element.get('name')}' "
-                f"needs manual classification"
-            )
-            return None
-
-        # Unknown type
-        self.log_warning(f"Unknown IFC type: {ifc_type}")
-        return None

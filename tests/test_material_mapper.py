@@ -1,20 +1,25 @@
 """
-Tests for the MaterialMapperAgent - verifies material mapping, waste factors,
-aggregation, and edge cases.
+Tests for the MaterialMapperAgent - verifies waste factors, aggregation,
+AI response processing, and edge cases.
 
-Coach Simple explains:
-    "We test that a wall correctly maps to concrete, steel, formwork, plaster,
-    and paint, with the right quantities and waste factors."
+AI calls are mocked so tests don't need a real API key.
 """
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 from src.agents.material_mapper import MaterialMapperAgent
 
 
+def _create_mock_llm():
+    """Create a mock LLMService for material mapping."""
+    mock = MagicMock()
+    return mock
+
+
 @pytest.fixture
 def mapper():
-    return MaterialMapperAgent()
+    return MaterialMapperAgent(llm_service=_create_mock_llm())
 
 
 def make_element(ifc_id, ifc_type, is_external=False, materials=None, category=None):
@@ -65,121 +70,169 @@ class TestWasteFactor:
         assert mapper._get_waste_factor("concrete.unknown") == 0.05
 
 
-# ---- Rule Matching Tests ----
+# ---- _apply_material_rule Tests ----
 
-class TestRuleMatching:
-    def test_single_variant_always_matches(self, mapper):
-        """If only one variant exists, it's always used."""
-        rules = {"standard": {"materials": [{"name": "Test"}]}}
-        result = mapper._find_matching_rule(rules, True, [])
-        assert result == {"materials": [{"name": "Test"}]}
+class TestApplyMaterialRule:
+    def test_basic_rule(self, mapper):
+        """Rule with exact source match, multiplier 1.0, waste key."""
+        rule = {
+            "name": "Concrete C25/30",
+            "unit": "m3",
+            "source": "Column volume",
+            "multiplier": 1.0,
+            "waste_key": "concrete.standard",
+        }
+        qty_lookup = {"Column volume": 10.0}
+        element = {"ifc_id": 1, "category": "frame"}
 
-    def test_external_wall_with_concrete_material(self, mapper):
-        """External wall with concrete should match concrete_external variant."""
-        type_rules = mapper.element_rules.get("IfcWall", {})
-        result = mapper._find_matching_rule(type_rules, True, ["Concrete C25/30"])
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+
         assert result is not None
-        # Should have concrete-related materials
-        mat_names = [m["name"] for m in result["materials"]]
-        assert any("Concrete" in n for n in mat_names)
+        assert result["description"] == "Concrete C25/30"
+        assert result["unit"] == "m3"
+        assert result["quantity"] == 10.0
+        assert result["waste_factor"] == 0.05
+        assert result["total_quantity"] == 10.5
 
-    def test_internal_wall_matches_brick(self, mapper):
-        """Internal wall without concrete material matches brick variant."""
-        type_rules = mapper.element_rules.get("IfcWall", {})
-        result = mapper._find_matching_rule(type_rules, False, ["Brick"])
+    def test_multiplier_applied(self, mapper):
+        """Multiplier (e.g., 150 kg/m3 steel ratio) is applied to base qty."""
+        rule = {
+            "name": "Reinforcement steel",
+            "unit": "kg",
+            "source": "Column volume",
+            "multiplier": 150.0,
+            "waste_key": "reinforcement_steel.standard",
+        }
+        qty_lookup = {"Column volume": 2.0}
+        element = {"ifc_id": 1, "category": "frame"}
+
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+
+        assert result["quantity"] == 300.0
+        # 300 * 1.03 = 309
+        assert result["total_quantity"] == 309.0
+
+    def test_partial_source_matching(self, mapper):
+        """If exact source key doesn't match, try partial matching."""
+        rule = {
+            "name": "Concrete",
+            "unit": "m3",
+            "source": "volume",
+            "multiplier": 1.0,
+            "waste_key": "concrete.standard",
+        }
+        qty_lookup = {"Slab volume": 5.0}
+        element = {"ifc_id": 1, "category": "upper_floors"}
+
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+
         assert result is not None
-        mat_names = [m["name"] for m in result["materials"]]
-        assert any("brick" in n.lower() or "Brick" in n for n in mat_names)
+        assert result["quantity"] == 5.0
 
-    def test_is_external_none_falls_to_fallback(self, mapper):
-        """Element with is_external=None should fall to the first variant."""
-        type_rules = mapper.element_rules.get("IfcWall", {})
-        result = mapper._find_matching_rule(type_rules, None, [])
-        assert result is not None  # Should return fallback, not None
+    def test_missing_source_returns_none(self, mapper):
+        """Rule with a source that doesn't match any quantity returns None."""
+        rule = {
+            "name": "Concrete",
+            "unit": "m3",
+            "source": "nonexistent quantity",
+            "multiplier": 1.0,
+            "waste_key": "concrete.standard",
+        }
+        qty_lookup = {"Column volume": 10.0}
+        element = {"ifc_id": 1, "category": "frame"}
 
-    def test_no_rules_for_type(self, mapper):
-        """Unknown element type returns empty list."""
-        element = make_element(1, "IfcStair")
-        result = mapper._map_element(element, [])
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+        assert result is None
+
+    def test_waste_value_used_directly(self, mapper):
+        """waste_value takes precedence when waste_key is absent."""
+        rule = {
+            "name": "Door unit",
+            "unit": "nr",
+            "source": "Door count",
+            "multiplier": 1.0,
+            "waste_value": 0.0,
+        }
+        qty_lookup = {"Door count": 1}
+        element = {"ifc_id": 1, "category": "doors"}
+
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+
+        assert result["waste_factor"] == 0.0
+        assert result["quantity"] == result["total_quantity"]
+
+    def test_source_elements_tracked(self, mapper):
+        """Result includes the element's ifc_id in source_elements."""
+        rule = {
+            "name": "Paint",
+            "unit": "m2",
+            "source": "Wall area",
+            "multiplier": 1.0,
+            "waste_key": "paint.standard",
+        }
+        qty_lookup = {"Wall area": 30.0}
+        element = {"ifc_id": 42, "category": "external_walls"}
+
+        result = mapper._apply_material_rule(rule, qty_lookup, element)
+        assert result["source_elements"] == [42]
+
+
+# ---- _process_ai_materials Tests ----
+
+class TestProcessAIMaterials:
+    def test_processes_ai_response(self, mapper):
+        """Converts AI element result with materials list to material dicts."""
+        elements = [make_element(1, "IfcColumn", category="frame")]
+        qty_lookup = {
+            1: [
+                {"description": "Column volume", "quantity": 0.27},
+                {"description": "Column surface area", "quantity": 3.6},
+            ]
+        }
+        ai_elem_result = {
+            "element_id": 1,
+            "materials": [
+                {
+                    "name": "Concrete C25/30",
+                    "unit": "m3",
+                    "source": "Column volume",
+                    "multiplier": 1.0,
+                    "waste_key": "concrete.standard",
+                },
+                {
+                    "name": "Formwork",
+                    "unit": "m2",
+                    "source": "Column surface area",
+                    "multiplier": 1.0,
+                    "waste_key": "formwork.standard",
+                },
+            ],
+        }
+
+        result = mapper._process_ai_materials(ai_elem_result, qty_lookup, elements)
+
+        assert len(result) == 2
+        assert result[0]["description"] == "Concrete C25/30"
+        assert result[1]["description"] == "Formwork"
+
+    def test_unknown_element_id_returns_empty(self, mapper):
+        """AI result for unknown element_id returns empty list."""
+        elements = [make_element(1, "IfcColumn")]
+        qty_lookup = {}
+        ai_elem_result = {
+            "element_id": 999,
+            "materials": [{"name": "Concrete", "unit": "m3", "source": "x"}],
+        }
+
+        result = mapper._process_ai_materials(ai_elem_result, qty_lookup, elements)
         assert result == []
 
-
-# ---- Material Mapping Tests ----
-
-class TestMaterialMapping:
-    def test_slab_produces_5_materials(self, mapper):
-        """Slab maps to: concrete, steel, formwork, screed, ceiling plaster."""
-        element = make_element(1, "IfcSlab", category="upper_floors")
-        quantities = [
-            {"description": "Slab volume", "quantity": 24.0, "unit": "m3"},
-            {"description": "Slab area (top face)", "quantity": 120.0, "unit": "m2"},
-            {"description": "Slab area (bottom face / soffit)", "quantity": 120.0, "unit": "m2"},
-            {"description": "Formwork area (soffit + edges)", "quantity": 128.8, "unit": "m2"},
-        ]
-        result = mapper._map_element(element, quantities)
-        assert len(result) == 5
-
-        names = [m["description"] for m in result]
-        assert any("Concrete" in n for n in names)
-        assert "Reinforcement steel" in names
-
-    def test_slab_concrete_waste_5_percent(self, mapper):
-        """Slab concrete has 5% waste factor."""
-        element = make_element(1, "IfcSlab", category="upper_floors")
-        quantities = [
-            {"description": "Slab volume", "quantity": 10.0, "unit": "m3"},
-            {"description": "Slab area (top face)", "quantity": 50.0, "unit": "m2"},
-            {"description": "Slab area (bottom face / soffit)", "quantity": 50.0, "unit": "m2"},
-            {"description": "Formwork area (soffit + edges)", "quantity": 55.0, "unit": "m2"},
-        ]
-        result = mapper._map_element(element, quantities)
-
-        concrete = next(m for m in result if "Concrete" in m["description"])
-        assert concrete["waste_factor"] == 0.05
-        # total = 10 * 1.05 = 10.5
-        assert concrete["total_quantity"] == 10.5
-
-    def test_slab_steel_multiplier_100(self, mapper):
-        """Slab reinforcement uses 100 kg/m3 multiplier."""
-        element = make_element(1, "IfcSlab", category="upper_floors")
-        quantities = [
-            {"description": "Slab volume", "quantity": 10.0, "unit": "m3"},
-            {"description": "Slab area (top face)", "quantity": 50.0, "unit": "m2"},
-            {"description": "Slab area (bottom face / soffit)", "quantity": 50.0, "unit": "m2"},
-            {"description": "Formwork area (soffit + edges)", "quantity": 55.0, "unit": "m2"},
-        ]
-        result = mapper._map_element(element, quantities)
-
-        steel = next(m for m in result if "Reinforcement" in m["description"])
-        # base = 10 * 100 = 1000 kg, waste 3%, total = 1030
-        assert steel["quantity"] == 1000.0
-        assert steel["total_quantity"] == 1030.0
-
-    def test_door_zero_waste(self, mapper):
-        """Door materials have 0% waste."""
-        element = make_element(1, "IfcDoor", category="doors")
-        quantities = [
-            {"description": "Door count", "quantity": 1, "unit": "nr"},
-            {"description": "Door opening area (for wall deduction)", "quantity": 1.89, "unit": "m2"},
-            {"description": "Door frame perimeter", "quantity": 5.1, "unit": "m"},
-        ]
-        result = mapper._map_element(element, quantities)
-        for m in result:
-            assert m["waste_factor"] == 0
-            assert m["quantity"] == m["total_quantity"]
-
-    def test_window_sill_has_10_percent_waste(self, mapper):
-        """Window sill uses tiles.standard = 10% waste."""
-        element = make_element(1, "IfcWindow", category="windows")
-        quantities = [
-            {"description": "Window count", "quantity": 1, "unit": "nr"},
-            {"description": "Window opening area (for wall deduction)", "quantity": 1.8, "unit": "m2"},
-            {"description": "Window sill length", "quantity": 1.2, "unit": "m"},
-        ]
-        result = mapper._map_element(element, quantities)
-        sill = next((m for m in result if "sill" in m["description"].lower()), None)
-        if sill:
-            assert sill["waste_factor"] == 0.10
+    def test_no_element_id_returns_empty(self, mapper):
+        """AI result without element_id field returns empty list."""
+        result = mapper._process_ai_materials(
+            {"materials": []}, {}, [make_element(1, "IfcColumn")]
+        )
+        assert result == []
 
 
 # ---- Aggregation Tests ----
@@ -231,7 +284,7 @@ class TestAggregation:
 class TestMapperExecute:
     @pytest.mark.asyncio
     async def test_empty_elements_no_crash(self, mapper):
-        """No elements -> no crash."""
+        """No elements -> no crash, early return."""
         state = {
             "parsed_elements": [],
             "calculated_quantities": [],
@@ -241,8 +294,41 @@ class TestMapperExecute:
         assert result.get("material_list") is None or result.get("material_list") == []
 
     @pytest.mark.asyncio
-    async def test_full_mapping(self, mapper):
-        """End-to-end: element + quantities -> materials."""
+    async def test_full_mapping_with_mocked_ai(self):
+        """End-to-end: element + quantities -> materials (AI mocked)."""
+        mock_llm = MagicMock()
+        mock_llm.ask_json = AsyncMock(return_value={
+            "elements": [
+                {
+                    "element_id": 1,
+                    "materials": [
+                        {
+                            "name": "Concrete C25/30",
+                            "unit": "m3",
+                            "source": "Column volume",
+                            "multiplier": 1.0,
+                            "waste_key": "concrete.standard",
+                        },
+                        {
+                            "name": "Reinforcement steel",
+                            "unit": "kg",
+                            "source": "Column volume",
+                            "multiplier": 150.0,
+                            "waste_key": "reinforcement_steel.standard",
+                        },
+                        {
+                            "name": "Formwork",
+                            "unit": "m2",
+                            "source": "Column surface area (for formwork/plaster)",
+                            "multiplier": 1.0,
+                            "waste_key": "formwork.standard",
+                        },
+                    ],
+                }
+            ]
+        })
+
+        mapper = MaterialMapperAgent(llm_service=mock_llm)
         state = {
             "parsed_elements": [
                 make_element(1, "IfcColumn", category="frame"),
@@ -255,12 +341,63 @@ class TestMapperExecute:
                 ]),
             ],
             "processing_log": [],
+            "warnings": [],
         }
         result = await mapper.execute(state)
         materials = result["material_list"]
-        assert len(materials) > 0
+        assert len(materials) == 3
 
-        # Should have concrete, steel, formwork for column
         descriptions = [m["description"] for m in materials]
-        assert any("Concrete" in d for d in descriptions)
-        assert any("Reinforcement" in d or "steel" in d.lower() for d in descriptions)
+        assert "Concrete C25/30" in descriptions
+        assert "Reinforcement steel" in descriptions
+        assert "Formwork" in descriptions
+
+    @pytest.mark.asyncio
+    async def test_ai_failure_continues(self):
+        """If AI call fails for one batch, other batches still processed."""
+        call_count = 0
+
+        async def mock_ask_json(system_prompt, user_message, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("API error")
+            return {
+                "elements": [
+                    {
+                        "element_id": 2,
+                        "materials": [
+                            {
+                                "name": "Door unit",
+                                "unit": "nr",
+                                "source": "Door count",
+                                "multiplier": 1.0,
+                                "waste_value": 0.0,
+                            }
+                        ],
+                    }
+                ]
+            }
+
+        mock_llm = MagicMock()
+        mock_llm.ask_json = AsyncMock(side_effect=mock_ask_json)
+
+        mapper = MaterialMapperAgent(llm_service=mock_llm)
+        state = {
+            "parsed_elements": [
+                make_element(1, "IfcColumn", category="frame"),
+                make_element(2, "IfcDoor", category="doors"),
+            ],
+            "calculated_quantities": [
+                make_calc_qty(1, [{"description": "Column volume", "quantity": 0.27}]),
+                make_calc_qty(2, [{"description": "Door count", "quantity": 1}]),
+            ],
+            "processing_log": [],
+            "warnings": [],
+        }
+        result = await mapper.execute(state)
+
+        # Door materials should still be mapped despite column batch failure
+        assert len(result["material_list"]) == 1
+        assert result["material_list"][0]["description"] == "Door unit"
+        assert any("failed" in w.lower() for w in result["warnings"])

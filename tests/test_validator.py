@@ -1,9 +1,12 @@
 """
 Tests for the ValidatorAgent - verifies all 8 validation checks,
 boundary conditions, and error/warning behavior.
+
+AI validation is mocked to avoid real API calls.
 """
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from src.agents.validator import ValidatorAgent
 from src.models.project import ProcessingStatus
@@ -11,7 +14,10 @@ from src.models.project import ProcessingStatus
 
 @pytest.fixture
 def validator():
-    return ValidatorAgent()
+    v = ValidatorAgent()
+    # Mock AI validation so tests don't need a real API key
+    v._ai_validate = AsyncMock(return_value=None)
+    return v
 
 
 def make_state(
