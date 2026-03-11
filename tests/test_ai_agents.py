@@ -305,8 +305,8 @@ class TestValidatorAI:
         assert result["validation_report"]["ai_assessment"] == "acceptable"
 
     @pytest.mark.asyncio
-    async def test_ai_errors_added(self):
-        """AI review errors are added to the errors list and cause FAIL."""
+    async def test_ai_errors_downgraded_to_warnings(self):
+        """AI 'error' severity is downgraded to warning (AI can't block pipeline)."""
         mock_llm = MagicMock()
         mock_llm.ask_json = AsyncMock(return_value={
             "overall_assessment": "problematic",
@@ -329,8 +329,10 @@ class TestValidatorAI:
 
         result = await validator.execute(state)
 
-        assert any("[AI Review]" in e for e in result["errors"])
-        assert result["status"] == ProcessingStatus.FAILED
+        # AI "errors" become warnings - they should NOT block the pipeline
+        assert any("[AI Review]" in w for w in result["warnings"])
+        assert not any("[AI Review]" in e for e in result["errors"])
+        assert result["status"] == ProcessingStatus.COMPLETED
 
     @pytest.mark.asyncio
     async def test_ai_failure_non_critical(self):

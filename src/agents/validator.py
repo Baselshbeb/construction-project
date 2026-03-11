@@ -168,16 +168,16 @@ class ValidatorAgent(BaseAgent):
             checks["steel_ratio_reasonable"] = True
 
         # --- AI-powered intelligent validation ---
+        # AI issues are advisory - they should NEVER block the pipeline.
+        # Even AI "errors" are downgraded to warnings because only the
+        # arithmetic checks above should be able to fail the pipeline.
         ai_assessment = await self._ai_validate(state)
         if ai_assessment:
             for issue in ai_assessment.get("issues", []):
                 severity = issue.get("severity", "info")
                 message = issue.get("message", "")
-                if severity == "error":
-                    errors.append(f"[AI Review] {message}")
-                elif severity == "warning":
+                if severity in ("error", "warning"):
                     warnings.append(f"[AI Review] {message}")
-                # "info" level issues logged but not added to warnings
                 else:
                     self.log(f"  [AI Info] {message}")
 

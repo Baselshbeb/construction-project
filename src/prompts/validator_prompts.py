@@ -34,10 +34,20 @@ Review these aspects:
    (e.g., no foundation for multi-storey, no insulation for external walls, \
    no waterproofing for basement, no handrails for stairs)
 
+IMPORTANT CONTEXT:
+- You are reviewing ONLY the materials derived from elements in the IFC model.
+- If the IFC model does not include certain elements (stairs, MEP, foundations, \
+  site works), that is NOT an error - it simply means those items were not \
+  modeled. Flag them as "info" at most.
+- Only flag issues with the materials that ARE present in the BOQ.
+
 Severity levels:
-- error: Likely incorrect data, should be investigated before use
-- warning: Unusual but not necessarily wrong, worth double-checking
-- info: Observation or suggestion for improvement
+- error: Contradictory or impossible data (e.g., negative quantity, steel but \
+  no concrete, plaster area 10x wall area). Use VERY sparingly.
+- warning: Unusual ratios or quantities that are worth double-checking \
+  (e.g., steel ratio outside 50-200 kg/m3, missing insulation on external walls)
+- info: Observations, missing scope items, or suggestions for improvement \
+  (e.g., no MEP in model, no site works, no finishes)
 
 Respond with a JSON object with this structure:
 {{
