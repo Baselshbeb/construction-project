@@ -1,0 +1,57 @@
+{
+  "app.title": "Metraj AI",
+  "app.subtitle": "نظام تقدير مواد البناء بالذكاء الاصطناعي",
+  "nav.newProject": "مشروع جديد",
+
+  "upload.title": "ارفع نموذج المبنى",
+  "upload.description": "أسقط ملف IFC لإنشاء جدول كميات تلقائياً",
+  "upload.dropActive": "أسقط الملف هنا",
+  "upload.dropzone": "اسحب وأسقط ملف IFC هنا",
+  "upload.browse": "أو انقر للاختيار",
+  "upload.selectFile": "اختر ملف IFC",
+  "upload.invalidFile": "يرجى رفع ملف .ifc",
+
+  "steps.upload": "رفع IFC",
+  "steps.uploadDesc": "ملف نموذج المبنى",
+  "steps.analyze": "تحليل AI",
+  "steps.analyzeDesc": "معالجة من 6 خطوات",
+  "steps.getBOQ": "جدول الكميات",
+  "steps.getBOQDesc": "Excel, CSV, JSON",
+
+  "processing.title": "جاري معالجة {filename}",
+  "processing.subtitle": "خط الذكاء الاصطناعي يحلل نموذج المبنى",
+  "processing.uploading": "جاري رفع الملف...",
+
+  "pipeline.parsing": "تحليل IFC",
+  "pipeline.classification": "التصنيف",
+  "pipeline.calculation": "حساب الكميات",
+  "pipeline.mapping": "تعيين المواد",
+  "pipeline.generation": "إنشاء جدول الكميات",
+  "pipeline.validation": "التحقق",
+
+  "results.elementsParsed": "العناصر المحللة",
+  "results.materialsFound": "المواد المكتشفة",
+  "results.boqSections": "أقسام جدول الكميات",
+  "results.validation": "التحقق",
+
+  "download.excel": "تحميل Excel",
+  "download.csv": "تحميل CSV",
+  "download.json": "تحميل JSON",
+  "download.regenerate": "إعادة إنشاء بـ{lang}",
+  "download.regenerating": "جاري إعادة الإنشاء...",
+
+  "boq.title": "جدول الكميات",
+  "boq.itemNo": "رقم البند",
+  "boq.description": "الوصف",
+  "boq.unit": "الوحدة",
+  "boq.quantity": "الكمية",
+
+  "validation.title": "تقرير التحقق",
+  "validation.warnings": "تحذيرات ({count})",
+
+  "error.title": "حدث خطأ ما",
+  "error.tryAgain": "حاول مجدداً",
+  "error.wsConnection": "فشل اتصال WebSocket. هل الخادم يعمل؟",
+
+  "footer.text": "Metraj AI - نظام تقدير مواد البناء بالذكاء الاصطناعي"
+}

@@ -22,7 +22,16 @@ from pydantic_settings import BaseSettings
 
 # Load .env file from project root
 PROJECT_ROOT = Path(__file__).parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+_env_path = PROJECT_ROOT / ".env"
+if not _env_path.exists():
+    import warnings
+    warnings.warn(
+        f".env file not found at {_env_path}. "
+        "Create one with: ANTHROPIC_API_KEY=sk-ant-... "
+        "AI features will not work without it.",
+        stacklevel=2,
+    )
+load_dotenv(_env_path)
 
 
 class Settings(BaseSettings):

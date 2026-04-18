@@ -17,22 +17,23 @@ from typing import Any
 
 from src.agents.base_agent import BaseAgent
 from src.models.project import ElementCategory, ProcessingStatus
+from src.translations.strings import get_boq_sections
 
 
-# Section ordering and display names
-SECTION_CONFIG = [
-    (ElementCategory.SUBSTRUCTURE, "Substructure"),
-    (ElementCategory.FRAME, "Structural Frame (Columns & Beams)"),
-    (ElementCategory.EXTERNAL_WALLS, "External Walls"),
-    (ElementCategory.INTERNAL_WALLS, "Internal Walls & Partitions"),
-    (ElementCategory.UPPER_FLOORS, "Upper Floor Slabs"),
-    (ElementCategory.ROOF, "Roof"),
-    (ElementCategory.DOORS, "Doors"),
-    (ElementCategory.WINDOWS, "Windows"),
-    (ElementCategory.STAIRS, "Stairs & Ramps"),
-    (ElementCategory.FINISHES, "Finishes"),
-    (ElementCategory.MEP, "Mechanical, Electrical & Plumbing"),
-    (ElementCategory.EXTERNAL_WORKS, "External Works"),
+# Section ordering (category enums in display order)
+SECTION_ORDER = [
+    ElementCategory.SUBSTRUCTURE,
+    ElementCategory.FRAME,
+    ElementCategory.EXTERNAL_WALLS,
+    ElementCategory.INTERNAL_WALLS,
+    ElementCategory.UPPER_FLOORS,
+    ElementCategory.ROOF,
+    ElementCategory.DOORS,
+    ElementCategory.WINDOWS,
+    ElementCategory.STAIRS,
+    ElementCategory.FINISHES,
+    ElementCategory.MEP,
+    ElementCategory.EXTERNAL_WORKS,
 ]
 
 
@@ -50,6 +51,9 @@ class BOQGeneratorAgent(BaseAgent):
         self.log("Generating Bill of Quantities...")
         state["status"] = ProcessingStatus.GENERATING_BOQ
         state["current_step"] = "Generating BOQ"
+
+        language = state.get("language", "en")
+        section_titles = get_boq_sections(language)
 
         materials = state.get("material_list", [])
         building_info = state.get("building_info", {})
@@ -71,8 +75,9 @@ class BOQGeneratorAgent(BaseAgent):
         # Build BOQ sections
         sections = []
         section_no = 0
-        for category_enum, title in SECTION_CONFIG:
+        for category_enum in SECTION_ORDER:
             cat_key = category_enum.value
+            title = section_titles.get(cat_key, cat_key)
             cat_materials = by_category.get(cat_key, [])
             if not cat_materials:
                 continue
@@ -84,10 +89,14 @@ class BOQGeneratorAgent(BaseAgent):
                     "item_no": f"{section_no}.{i:02d}",
                     "description": mat["description"],
                     "unit": mat["unit"],
-                    "quantity": mat["total_quantity"],
+                    "quantity": round(mat["total_quantity"], 3),
+                    "base_quantity": round(mat.get("quantity", mat["total_quantity"]), 3),
+                    "waste_factor": mat.get("waste_factor", 0),
                     "rate": None,
                     "amount": None,
                     "category": cat_key,
+                    "source_elements": mat.get("source_elements", []),
+                    "element_count": len(mat.get("source_elements", [])),
                 })
 
             sections.append({
@@ -107,14 +116,18 @@ class BOQGeneratorAgent(BaseAgent):
                     "item_no": f"{section_no}.{i:02d}",
                     "description": mat["description"],
                     "unit": mat["unit"],
-                    "quantity": mat["total_quantity"],
+                    "quantity": round(mat["total_quantity"], 3),
+                    "base_quantity": round(mat.get("quantity", mat["total_quantity"]), 3),
+                    "waste_factor": mat.get("waste_factor", 0),
                     "rate": None,
                     "amount": None,
                     "category": "other",
+                    "source_elements": mat.get("source_elements", []),
+                    "element_count": len(mat.get("source_elements", [])),
                 })
             sections.append({
                 "section_no": section_no,
-                "title": "Other Items",
+                "title": section_titles.get("other", "Other Items"),
                 "category": "other",
                 "items": items,
                 "subtotal": None,

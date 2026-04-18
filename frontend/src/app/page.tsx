@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import { useTranslation, LanguageSwitcher } from "../context/LanguageContext";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -64,7 +65,17 @@ interface ValidationReport {
   summary: Record<string, number>;
 }
 
+const PIPELINE_STEP_KEYS = [
+  "pipeline.parsing",
+  "pipeline.classification",
+  "pipeline.calculation",
+  "pipeline.mapping",
+  "pipeline.generation",
+  "pipeline.validation",
+] as const;
+
 export default function Home() {
+  const { t, language } = useTranslation();
   const [appState, setAppState] = useState<AppState>("upload");
   const [projectId, setProjectId] = useState<string>("");
   const [filename, setFilename] = useState<string>("");
@@ -72,8 +83,31 @@ export default function Home() {
   const [result, setResult] = useState<ProjectResult | null>(null);
   const [error, setError] = useState<string>("");
   const [dragActive, setDragActive] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [reportLanguage, setReportLanguage] = useState(language);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Restore session on mount (survives page refresh)
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("metraj-session");
+      if (saved) {
+        const session = JSON.parse(saved);
+        if (session.projectId && session.appState === "processing") {
+          setProjectId(session.projectId);
+          setFilename(session.filename || "");
+          setReportLanguage(session.reportLanguage || "en");
+          setAppState("processing");
+          setProgress({ step: "Reconnecting...", current: 0, total: 6, percent: 0 });
+          connectWebSocket(session.projectId);
+        }
+      }
+    } catch {
+      // Ignore corrupted session data
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Clean up WebSocket on unmount
   useEffect(() => {
@@ -82,7 +116,8 @@ export default function Home() {
     };
   }, []);
 
-  const connectWebSocket = useCallback((pid: string) => {
+  const connectWebSocket = useCallback((pid: string, retries = 0) => {
+    const MAX_RETRIES = 5;
     const wsUrl = API_URL.replace("http", "ws");
     const ws = new WebSocket(`${wsUrl}/ws/${pid}`);
     wsRef.current = ws;
@@ -100,37 +135,53 @@ export default function Home() {
       } else if (data.type === "complete") {
         setResult(data.result);
         setAppState("results");
+        // Clear saved session on completion
+        sessionStorage.removeItem("metraj-session");
         ws.close();
       } else if (data.type === "error") {
         setError(data.message);
         setAppState("error");
+        sessionStorage.removeItem("metraj-session");
         ws.close();
       }
     };
 
-    ws.onerror = () => {
-      setError("WebSocket connection failed. Is the backend running?");
-      setAppState("error");
+    ws.onclose = (event) => {
+      // Only reconnect if we're still processing (not completed/error)
+      if (retries < MAX_RETRIES && appState === "processing" && !event.wasClean) {
+        const delay = Math.min(1000 * Math.pow(2, retries), 10000);
+        console.log(`WebSocket closed, reconnecting in ${delay}ms (attempt ${retries + 1}/${MAX_RETRIES})`);
+        setTimeout(() => connectWebSocket(pid, retries + 1), delay);
+      }
     };
-  }, []);
+
+    ws.onerror = () => {
+      // onclose will handle reconnection; only show error if all retries exhausted
+      if (retries >= MAX_RETRIES) {
+        setError(t("error.wsConnection"));
+        setAppState("error");
+        sessionStorage.removeItem("metraj-session");
+      }
+    };
+  }, [t, appState]);
 
   const uploadFile = useCallback(
     async (file: File) => {
       if (!file.name.toLowerCase().endsWith(".ifc")) {
-        setError("Please upload an .ifc file");
+        setError(t("upload.invalidFile"));
         setAppState("error");
         return;
       }
 
       setFilename(file.name);
       setAppState("processing");
-      setProgress({ step: "Uploading file...", current: 0, total: 6, percent: 0 });
+      setProgress({ step: t("processing.uploading"), current: 0, total: 6, percent: 0 });
 
       try {
         const formData = new FormData();
         formData.append("file", file);
 
-        const response = await fetch(`${API_URL}/api/projects/upload`, {
+        const response = await fetch(`${API_URL}/api/projects/upload?language=${language}`, {
           method: "POST",
           body: formData,
         });
@@ -142,13 +193,23 @@ export default function Home() {
 
         const data = await response.json();
         setProjectId(data.project_id);
+        setReportLanguage(language);
+
+        // Save session so it survives page refresh
+        sessionStorage.setItem("metraj-session", JSON.stringify({
+          projectId: data.project_id,
+          filename: file.name,
+          reportLanguage: language,
+          appState: "processing",
+        }));
+
         connectWebSocket(data.project_id);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Upload failed");
         setAppState("error");
       }
     },
-    [connectWebSocket]
+    [connectWebSocket, t, language]
   );
 
   const handleDrop = useCallback(
@@ -182,25 +243,57 @@ export default function Home() {
     window.open(`${API_URL}/api/projects/${projectId}/download/${format}`, "_blank");
   };
 
+  const regenerateReport = useCallback(async () => {
+    if (!projectId || regenerating) return;
+
+    setRegenerating(true);
+    setAppState("processing");
+    setProgress({ step: t("processing.uploading"), current: 0, total: 6, percent: 0 });
+    setResult(null);
+
+    try {
+      const response = await fetch(
+        `${API_URL}/api/projects/${projectId}/reprocess?language=${language}`,
+        { method: "POST" }
+      );
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || "Reprocess failed");
+      }
+
+      setReportLanguage(language);
+      connectWebSocket(projectId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reprocess failed");
+      setAppState("error");
+    } finally {
+      setRegenerating(false);
+    }
+  }, [projectId, regenerating, language, connectWebSocket, t]);
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-gray-200 bg-white">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-primary">Metraj AI</h1>
+            <h1 className="text-2xl font-bold text-primary">{t("app.title")}</h1>
             <p className="text-sm text-gray-500">
-              Construction Material Estimation System
+              {t("app.subtitle")}
             </p>
           </div>
-          {appState !== "upload" && (
-            <button
-              onClick={resetApp}
-              className="text-sm px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
-            >
-              New Project
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            <LanguageSwitcher />
+            {appState !== "upload" && (
+              <button
+                onClick={resetApp}
+                className="text-sm px-4 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition-colors"
+              >
+                {t("nav.newProject")}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -210,10 +303,10 @@ export default function Home() {
           <div className="max-w-2xl mx-auto">
             <div className="text-center mb-8">
               <h2 className="text-3xl font-bold text-foreground mb-2">
-                Upload Your Building Model
+                {t("upload.title")}
               </h2>
               <p className="text-gray-500">
-                Drop an IFC file to automatically generate a Bill of Quantities
+                {t("upload.description")}
               </p>
             </div>
 
@@ -237,12 +330,12 @@ export default function Home() {
               </div>
               <p className="text-lg font-medium text-foreground mb-1">
                 {dragActive
-                  ? "Drop your file here"
-                  : "Drag & drop your IFC file here"}
+                  ? t("upload.dropActive")
+                  : t("upload.dropzone")}
               </p>
-              <p className="text-sm text-gray-400 mb-4">or click to browse</p>
+              <p className="text-sm text-gray-400 mb-4">{t("upload.browse")}</p>
               <span className="inline-block px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium">
-                Select IFC File
+                {t("upload.selectFile")}
               </span>
               <input
                 ref={fileInputRef}
@@ -256,18 +349,18 @@ export default function Home() {
             <div className="mt-8 grid grid-cols-3 gap-4 text-center text-sm">
               <div className="p-4 rounded-xl bg-white border border-gray-100">
                 <div className="text-2xl font-bold text-primary mb-1">1</div>
-                <p className="font-medium">Upload IFC</p>
-                <p className="text-gray-400">Building model file</p>
+                <p className="font-medium">{t("steps.upload")}</p>
+                <p className="text-gray-400">{t("steps.uploadDesc")}</p>
               </div>
               <div className="p-4 rounded-xl bg-white border border-gray-100">
                 <div className="text-2xl font-bold text-primary mb-1">2</div>
-                <p className="font-medium">AI Analyzes</p>
-                <p className="text-gray-400">6-step pipeline</p>
+                <p className="font-medium">{t("steps.analyze")}</p>
+                <p className="text-gray-400">{t("steps.analyzeDesc")}</p>
               </div>
               <div className="p-4 rounded-xl bg-white border border-gray-100">
                 <div className="text-2xl font-bold text-primary mb-1">3</div>
-                <p className="font-medium">Get BOQ</p>
-                <p className="text-gray-400">Excel, CSV, JSON</p>
+                <p className="font-medium">{t("steps.getBOQ")}</p>
+                <p className="text-gray-400">{t("steps.getBOQDesc")}</p>
               </div>
             </div>
           </div>
@@ -276,9 +369,11 @@ export default function Home() {
         {/* Processing State */}
         {appState === "processing" && progress && (
           <div className="max-w-lg mx-auto text-center">
-            <h2 className="text-2xl font-bold mb-2">Processing {filename}</h2>
+            <h2 className="text-2xl font-bold mb-2">
+              {t("processing.title").replace("{filename}", filename)}
+            </h2>
             <p className="text-gray-500 mb-8">
-              Our AI pipeline is analyzing your building model
+              {t("processing.subtitle")}
             </p>
 
             {/* Progress bar */}
@@ -302,21 +397,15 @@ export default function Home() {
 
             {/* Pipeline steps */}
             <div className="text-left space-y-3">
-              {[
-                "IFC Parsing",
-                "Classification",
-                "Quantity Calculation",
-                "Material Mapping",
-                "BOQ Generation",
-                "Validation",
-              ].map((step, i) => {
+              {PIPELINE_STEP_KEYS.map((key, i) => {
+                const step = t(key);
                 const stepNum = i + 1;
                 const isDone = stepNum < progress.current;
                 const isCurrent = stepNum === progress.current;
 
                 return (
                   <div
-                    key={step}
+                    key={key}
                     className={`flex items-center gap-3 p-3 rounded-lg transition-all ${
                       isCurrent
                         ? "bg-primary-light/40 border border-primary/20"
@@ -348,7 +437,7 @@ export default function Home() {
                       {step}
                     </span>
                     {isCurrent && (
-                      <div className="ml-auto">
+                      <div className="ms-auto">
                         <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                       </div>
                     )}
@@ -365,44 +454,59 @@ export default function Home() {
             {/* Summary cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
               <SummaryCard
-                label="Elements Parsed"
+                label={t("results.elementsParsed")}
                 value={result.element_count}
               />
               <SummaryCard
-                label="Materials Found"
+                label={t("results.materialsFound")}
                 value={result.material_count}
               />
               <SummaryCard
-                label="BOQ Sections"
+                label={t("results.boqSections")}
                 value={result.boq_data?.total_sections || 0}
               />
               <SummaryCard
-                label="Validation"
+                label={t("results.validation")}
                 value={result.validation_report?.status || "N/A"}
                 isText
               />
             </div>
 
             {/* Download buttons */}
-            <div className="flex gap-3 mb-8">
+            <div className="flex flex-wrap gap-3 mb-8">
               <button
                 onClick={() => downloadReport("xlsx")}
                 className="px-5 py-2.5 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 transition-colors"
               >
-                Download Excel
+                {t("download.excel")}
               </button>
               <button
                 onClick={() => downloadReport("csv")}
                 className="px-5 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
               >
-                Download CSV
+                {t("download.csv")}
               </button>
               <button
                 onClick={() => downloadReport("json")}
                 className="px-5 py-2.5 bg-gray-600 text-white rounded-lg font-medium hover:bg-gray-700 transition-colors"
               >
-                Download JSON
+                {t("download.json")}
               </button>
+
+              {language !== reportLanguage && (
+                <button
+                  onClick={regenerateReport}
+                  disabled={regenerating}
+                  className="px-5 py-2.5 bg-orange-500 text-white rounded-lg font-medium hover:bg-orange-600 transition-colors disabled:opacity-50 ms-auto"
+                >
+                  {regenerating
+                    ? t("download.regenerating")
+                    : t("download.regenerate").replace(
+                        "{lang}",
+                        { en: "English", tr: "Turkce", ar: "العربية" }[language]
+                      )}
+                </button>
+              )}
             </div>
 
             {/* BOQ Table */}
@@ -410,7 +514,7 @@ export default function Home() {
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                 <div className="p-4 border-b border-gray-200 bg-gray-50">
                   <h3 className="text-lg font-bold text-foreground">
-                    Bill of Quantities
+                    {t("boq.title")}
                   </h3>
                   <p className="text-sm text-gray-500">
                     {result.boq_data.project_name}
@@ -423,10 +527,10 @@ export default function Home() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-white" style={{ backgroundColor: "var(--primary)" }}>
-                        <th className="px-4 py-3 text-left w-20">Item No.</th>
-                        <th className="px-4 py-3 text-left">Description</th>
-                        <th className="px-4 py-3 text-center w-16">Unit</th>
-                        <th className="px-4 py-3 text-right w-28">Quantity</th>
+                        <th className="px-4 py-3 text-start w-20">{t("boq.itemNo")}</th>
+                        <th className="px-4 py-3 text-start">{t("boq.description")}</th>
+                        <th className="px-4 py-3 text-center w-16">{t("boq.unit")}</th>
+                        <th className="px-4 py-3 text-end w-28">{t("boq.quantity")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -442,7 +546,7 @@ export default function Home() {
             {/* Validation Report */}
             {result.validation_report && (
               <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
-                <h3 className="text-lg font-bold mb-3">Validation Report</h3>
+                <h3 className="text-lg font-bold mb-3">{t("validation.title")}</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   {result.validation_report.summary &&
                     Object.entries(result.validation_report.summary).map(
@@ -468,7 +572,7 @@ export default function Home() {
             {result.warnings.length > 0 && (
               <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
                 <h4 className="font-bold text-yellow-800 mb-2">
-                  Warnings ({result.warnings.length})
+                  {t("validation.warnings").replace("{count}", String(result.warnings.length))}
                 </h4>
                 <ul className="text-sm text-yellow-700 space-y-1">
                   {result.warnings.map((w, i) => (
@@ -485,14 +589,14 @@ export default function Home() {
           <div className="max-w-lg mx-auto text-center">
             <div className="text-6xl mb-4">!</div>
             <h2 className="text-2xl font-bold text-danger mb-2">
-              Something went wrong
+              {t("error.title")}
             </h2>
             <p className="text-gray-500 mb-6">{error}</p>
             <button
               onClick={resetApp}
               className="px-6 py-2.5 bg-primary text-white rounded-lg font-medium hover:opacity-90 transition-opacity"
             >
-              Try Again
+              {t("error.tryAgain")}
             </button>
           </div>
         )}
@@ -501,7 +605,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-gray-200 mt-16">
         <div className="max-w-6xl mx-auto px-6 py-4 text-center text-sm text-gray-400">
-          Metraj AI - Construction Material Estimation System
+          {t("footer.text")}
         </div>
       </footer>
     </div>
@@ -548,7 +652,7 @@ function SectionRows({ section }: { section: BOQSection }) {
           <td className="px-4 py-2 text-gray-500">{item.item_no}</td>
           <td className="px-4 py-2">{item.description}</td>
           <td className="px-4 py-2 text-center text-gray-500">{item.unit}</td>
-          <td className="px-4 py-2 text-right font-mono">
+          <td className="px-4 py-2 text-end font-mono">
             {item.quantity.toLocaleString(undefined, {
               minimumFractionDigits: 2,
               maximumFractionDigits: 2,

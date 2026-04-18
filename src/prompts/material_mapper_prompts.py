@@ -60,16 +60,38 @@ IMPORTANT MATERIAL ESTIMATION PRINCIPLES:
 
 Respond with a JSON object containing an "elements" array."""
 
+# Language-specific instructions appended to the system prompt
+MAPPER_LANGUAGE_INSTRUCTIONS = {
+    "en": "",
+    "tr": (
+        "\n\nLANGUAGE: Write ALL material names and descriptions in TURKISH. "
+        "Examples: 'Beton C25/30', 'Donatı Çeliği B500', 'Kalıp', "
+        "'Alçı Sıva', 'İç Cephe Boyası', 'Dış Cephe Boyası', "
+        "'Su Yalıtım Membranı', 'Isı Yalıtımı'. "
+        "Keep units in SI (m2, m3, kg, etc.). Keep JSON keys in English."
+    ),
+    "ar": (
+        "\n\nLANGUAGE: Write ALL material names and descriptions in ARABIC. "
+        "Examples: 'خرسانة C25/30', 'حديد تسليح B500', 'قوالب صب', "
+        "'لياسة جبس', 'طلاء داخلي', 'طلاء خارجي', "
+        "'غشاء عزل مائي', 'عزل حراري'. "
+        "Keep units in SI (m2, m3, kg, etc.). Keep JSON keys in English."
+    ),
+}
 
-def get_mapper_system_prompt(waste_factors: dict, element_rules: dict) -> str:
-    """Build the system prompt with waste factors and rules injected."""
+
+def get_mapper_system_prompt(
+    waste_factors: dict, element_rules: dict, language: str = "en",
+) -> str:
+    """Build the system prompt with waste factors, rules, and language injected."""
     # Clean up rules for readability - remove the _description key
     clean_rules = {k: v for k, v in element_rules.items() if k != "_description"}
 
-    return MAPPER_SYSTEM_TEMPLATE.format(
+    base = MAPPER_SYSTEM_TEMPLATE.format(
         waste_factors=json.dumps(waste_factors, indent=2),
         element_rules=json.dumps(clean_rules, indent=2),
     )
+    return base + MAPPER_LANGUAGE_INSTRUCTIONS.get(language, "")
 
 
 def build_mapper_message(elements: list[dict[str, Any]]) -> str:

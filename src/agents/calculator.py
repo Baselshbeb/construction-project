@@ -18,6 +18,56 @@ from typing import Any
 from src.agents.base_agent import BaseAgent
 from src.models.project import ProcessingStatus
 
+# Quantity key aliases: different IFC exporters use different names for the same
+# quantity.  The calculator tries aliases in order and returns the first non-zero
+# value found.  This fixes cross-exporter compatibility issues (Revit vs ArchiCAD
+# vs generic).
+QTY_ALIASES: dict[str, list[str]] = {
+    "Length": ["Length", "NominalLength"],
+    "Height": ["Height", "NominalHeight", "OverallHeight"],
+    "Width": ["Width", "NominalWidth", "Thickness", "OverallWidth"],
+    "Depth": ["Depth", "NominalDepth", "SlabDepth", "Thickness"],
+    "GrossArea": [
+        "GrossArea", "GrossSideArea", "GrossWallArea", "GrossFloorArea",
+        "GrossFootprintArea", "Area",
+    ],
+    "NetArea": [
+        "NetArea", "NetSideArea", "NetWallArea", "NetFloorArea",
+        "NetFootprintArea",
+    ],
+    "GrossVolume": ["GrossVolume", "Volume"],
+    "NetVolume": ["NetVolume"],
+    "Perimeter": ["Perimeter", "GrossPerimeter"],
+    "CrossSectionArea": ["CrossSectionArea", "GrossCrossSectionArea"],
+    "OuterSurfaceArea": ["OuterSurfaceArea", "GrossOuterSurfaceArea", "GrossSurfaceArea"],
+}
+
+# Threshold below which a quantity value is likely in millimetres (anything
+# above ~10 for a "Width" / "Depth" field is suspicious for metres).
+_MM_THRESHOLD = 10.0
+
+
+def _resolve_qty(qto: dict[str, float], key: str) -> float:
+    """Look up a quantity using alias chain; return first non-zero hit."""
+    aliases = QTY_ALIASES.get(key, [key])
+    for alias in aliases:
+        val = qto.get(alias, 0)
+        if val:
+            return float(val)
+    return 0.0
+
+
+def _normalize_unit(value: float, key: str) -> float:
+    """Detect likely-millimetre values and convert to metres.
+
+    Heuristic: for dimensional quantities (Width, Height, Depth, Length),
+    a raw value > _MM_THRESHOLD is almost certainly in mm when the expected
+    SI unit is metres (walls are rarely >10 m thick, or >10 m deep).
+    """
+    if key in ("Width", "Depth", "Thickness") and value > _MM_THRESHOLD:
+        return value / 1000.0
+    return value
+
 
 class CalculatorAgent(BaseAgent):
     """Computes construction quantities from parsed element data."""
@@ -38,6 +88,56 @@ class CalculatorAgent(BaseAgent):
         if not elements:
             self.log_warning("No elements to calculate!")
             return state
+
+        # Build a lookup of door/window opening areas per storey so we can
+        # deduct actual openings from walls instead of guessing 15%.
+        opening_area_by_storey: dict[str, float] = {}
+        opening_count_by_storey: dict[str, int] = {}
+        wall_gross_area_by_storey: dict[str, float] = {}
+
+        # First pass: collect opening areas from doors & windows
+        for elem in elements:
+            ifc_type = elem.get("ifc_type", "")
+            storey = elem.get("storey") or "_unknown"
+            if ifc_type in ("IfcDoor", "IfcWindow"):
+                qto = elem.get("quantities", {})
+                w = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+                h = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
+                area = qto.get("Area", 0) or (w * h)
+                opening_area_by_storey[storey] = (
+                    opening_area_by_storey.get(storey, 0) + area
+                )
+                opening_count_by_storey[storey] = (
+                    opening_count_by_storey.get(storey, 0) + 1
+                )
+
+        # Second pass: collect gross wall areas per storey
+        for elem in elements:
+            ifc_type = elem.get("ifc_type", "")
+            storey = elem.get("storey") or "_unknown"
+            if ifc_type in ("IfcWall", "IfcWallStandardCase"):
+                qto = elem.get("quantities", {})
+                length = _resolve_qty(qto, "Length")
+                height = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
+                gross_area = _resolve_qty(qto, "GrossArea")
+                if not gross_area and length and height:
+                    gross_area = length * height
+                wall_gross_area_by_storey[storey] = (
+                    wall_gross_area_by_storey.get(storey, 0) + gross_area
+                )
+
+        # Compute opening ratio per storey (for wall net-area deduction)
+        self._opening_ratio_by_storey: dict[str, float] = {}
+        for storey in wall_gross_area_by_storey:
+            wall_area = wall_gross_area_by_storey[storey]
+            opening_area = opening_area_by_storey.get(storey, 0)
+            if wall_area > 0 and opening_area > 0:
+                ratio = min(opening_area / wall_area, 0.6)  # cap at 60%
+                self._opening_ratio_by_storey[storey] = ratio
+                self.log(
+                    f"  Storey '{storey}': opening ratio = {ratio:.1%} "
+                    f"({opening_area:.1f} m2 openings / {wall_area:.1f} m2 walls)"
+                )
 
         calculated = []
         for element in elements:
@@ -97,47 +197,52 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate wall quantities.
 
-        Coach Simple: "A wall needs: area for plaster/paint, volume for
-        concrete, and we subtract doors/windows (net area)."
+        Uses actual door/window opening ratios per storey instead of a
+        hardcoded 15% deduction.
         """
         quantities = []
-        length = qto.get("Length", 0)
-        height = qto.get("Height", 0)
-        width = qto.get("Width", 0)
+        length = _resolve_qty(qto, "Length")
+        height = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
+        width = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
         is_external = elem.get("is_external", False)
+        storey = elem.get("storey") or "_unknown"
 
         # Gross wall area (one side)
-        gross_area = qto.get("GrossArea", 0) or qto.get("GrossSideArea", 0)
+        gross_area = _resolve_qty(qto, "GrossArea")
         if not gross_area and length and height:
             gross_area = length * height
 
-        # Net area (minus openings)
-        net_area = qto.get("NetArea", 0) or qto.get("NetSideArea", 0)
-        if not net_area:
-            net_area = gross_area * 0.85  # assume 15% openings
+        # Net area — use IFC value if present, otherwise deduct actual
+        # opening ratio for this storey (falls back to 10% if no data).
+        net_area = _resolve_qty(qto, "NetArea")
+        if not net_area and gross_area:
+            opening_ratio = self._opening_ratio_by_storey.get(storey, 0.10)
+            net_area = gross_area * (1.0 - opening_ratio)
 
         # Volume
-        gross_volume = qto.get("GrossVolume", 0)
+        gross_volume = _resolve_qty(qto, "GrossVolume")
         if not gross_volume and gross_area and width:
             gross_volume = gross_area * width
 
-        net_volume = qto.get("NetVolume", 0)
-        if not net_volume:
-            net_volume = gross_volume * 0.85
+        net_volume = _resolve_qty(qto, "NetVolume")
+        if not net_volume and gross_volume:
+            opening_ratio = self._opening_ratio_by_storey.get(storey, 0.10)
+            net_volume = gross_volume * (1.0 - opening_ratio)
 
+        # Full precision — rounding deferred to export
         quantities.append({
             "description": "Gross wall area (one side)",
-            "quantity": round(gross_area, 2),
+            "quantity": gross_area,
             "unit": "m2",
         })
         quantities.append({
             "description": "Net wall area (minus openings, one side)",
-            "quantity": round(net_area, 2),
+            "quantity": net_area,
             "unit": "m2",
         })
         quantities.append({
             "description": "Wall volume",
-            "quantity": round(net_volume, 2),
+            "quantity": net_volume,
             "unit": "m3",
         })
 
@@ -145,27 +250,25 @@ class CalculatorAgent(BaseAgent):
         if not is_external:
             quantities.append({
                 "description": "Net wall area (both sides, for plaster/paint)",
-                "quantity": round(net_area * 2, 2),
+                "quantity": net_area * 2,
                 "unit": "m2",
             })
         else:
-            # External: internal side + external side
             quantities.append({
                 "description": "Internal face area (for plaster/paint)",
-                "quantity": round(net_area, 2),
+                "quantity": net_area,
                 "unit": "m2",
             })
             quantities.append({
                 "description": "External face area (for ext. plaster/paint)",
-                "quantity": round(net_area, 2),
+                "quantity": net_area,
                 "unit": "m2",
             })
 
-        # Perimeter for skirting
         if length:
             quantities.append({
                 "description": "Wall length (for skirting/coving)",
-                "quantity": round(length, 2),
+                "quantity": length,
                 "unit": "m",
             })
 
@@ -174,56 +277,31 @@ class CalculatorAgent(BaseAgent):
     def _calc_slab(
         self, elem: dict, qto: dict, props: dict
     ) -> list[dict[str, Any]]:
-        """Calculate slab quantities.
-
-        Coach Simple: "A floor slab needs: area for tiling/screeding,
-        volume for concrete, perimeter for edge details."
-        """
+        """Calculate slab quantities."""
         quantities = []
-        length = qto.get("Length", 0)
-        width_val = qto.get("Width", 0)
-        depth = qto.get("Depth", 0)
+        length = _resolve_qty(qto, "Length")
+        width_val = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+        depth = _normalize_unit(_resolve_qty(qto, "Depth"), "Depth")
 
-        area = qto.get("Area", 0) or qto.get("NetArea", 0)
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
         if not area and length and width_val:
             area = length * width_val
 
-        volume = qto.get("GrossVolume", 0) or qto.get("NetVolume", 0)
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
         if not volume and area and depth:
             volume = area * depth
 
-        perimeter = qto.get("Perimeter", 0)
+        perimeter = _resolve_qty(qto, "Perimeter")
         if not perimeter and length and width_val:
             perimeter = 2 * (length + width_val)
 
-        quantities.append({
-            "description": "Slab area (top face)",
-            "quantity": round(area, 2),
-            "unit": "m2",
-        })
-        quantities.append({
-            "description": "Slab area (bottom face / soffit)",
-            "quantity": round(area, 2),
-            "unit": "m2",
-        })
-        quantities.append({
-            "description": "Slab volume",
-            "quantity": round(volume, 2),
-            "unit": "m3",
-        })
-        quantities.append({
-            "description": "Slab perimeter",
-            "quantity": round(perimeter, 2),
-            "unit": "m",
-        })
+        quantities.append({"description": "Slab area (top face)", "quantity": area, "unit": "m2"})
+        quantities.append({"description": "Slab area (bottom face / soffit)", "quantity": area, "unit": "m2"})
+        quantities.append({"description": "Slab volume", "quantity": volume, "unit": "m3"})
+        quantities.append({"description": "Slab perimeter", "quantity": perimeter, "unit": "m"})
 
-        # Formwork area = bottom face + edge
         edge_area = perimeter * depth if perimeter and depth else 0
-        quantities.append({
-            "description": "Formwork area (soffit + edges)",
-            "quantity": round(area + edge_area, 2),
-            "unit": "m2",
-        })
+        quantities.append({"description": "Formwork area (soffit + edges)", "quantity": area + edge_area, "unit": "m2"})
 
         return quantities
 
@@ -231,44 +309,30 @@ class CalculatorAgent(BaseAgent):
         self, elem: dict, qto: dict, props: dict
     ) -> list[dict[str, Any]]:
         """Calculate column quantities."""
+        import math
         quantities = []
-        height = qto.get("Length", 0)  # Column "length" is its height
-        cross_section = qto.get("CrossSectionArea", 0)
-        volume = qto.get("GrossVolume", 0) or qto.get("NetVolume", 0)
-        outer_surface = qto.get("OuterSurfaceArea", 0)
+        # Columns: "Length" in IFC is height; also try "Height" alias
+        height = _resolve_qty(qto, "Height") or _resolve_qty(qto, "Length")
+        cross_section = _resolve_qty(qto, "CrossSectionArea")
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        outer_surface = _resolve_qty(qto, "OuterSurfaceArea")
 
         if not volume and cross_section and height:
             volume = cross_section * height
 
-        quantities.append({
-            "description": "Column volume",
-            "quantity": round(volume, 3),
-            "unit": "m3",
-        })
+        quantities.append({"description": "Column volume", "quantity": volume, "unit": "m3"})
 
         if outer_surface:
-            quantities.append({
-                "description": "Column surface area (for formwork/plaster)",
-                "quantity": round(outer_surface, 2),
-                "unit": "m2",
-            })
+            quantities.append({"description": "Column surface area (for formwork/plaster)", "quantity": outer_surface, "unit": "m2"})
         elif cross_section and height:
-            # Approximate: assume square cross-section
-            import math
-            side = math.sqrt(cross_section)
-            surface = 4 * side * height
-            quantities.append({
-                "description": "Column surface area (estimated)",
-                "quantity": round(surface, 2),
-                "unit": "m2",
-            })
+            # Estimate surface: use perimeter * height.
+            # Perimeter for a circle = pi*d, for a square = 4*side.
+            # Use circumscribed circle as upper bound: pi * sqrt(4A/pi) = 2*sqrt(pi*A)
+            perimeter_est = 2 * math.sqrt(math.pi * cross_section)
+            surface = perimeter_est * height
+            quantities.append({"description": "Column surface area (estimated)", "quantity": surface, "unit": "m2"})
 
-        quantities.append({
-            "description": "Column count",
-            "quantity": 1,
-            "unit": "nr",
-        })
-
+        quantities.append({"description": "Column count", "quantity": 1, "unit": "nr"})
         return quantities
 
     def _calc_beam(
@@ -276,31 +340,19 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate beam quantities."""
         quantities = []
-        length = qto.get("Length", 0)
-        volume = qto.get("GrossVolume", 0) or qto.get("NetVolume", 0)
-        outer_surface = qto.get("OuterSurfaceArea", 0)
-        cross_section = qto.get("CrossSectionArea", 0)
+        length = _resolve_qty(qto, "Length")
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        outer_surface = _resolve_qty(qto, "OuterSurfaceArea")
+        cross_section = _resolve_qty(qto, "CrossSectionArea")
 
         if not volume and cross_section and length:
             volume = cross_section * length
 
-        quantities.append({
-            "description": "Beam volume",
-            "quantity": round(volume, 3),
-            "unit": "m3",
-        })
-        quantities.append({
-            "description": "Beam length",
-            "quantity": round(length, 2),
-            "unit": "m",
-        })
+        quantities.append({"description": "Beam volume", "quantity": volume, "unit": "m3"})
+        quantities.append({"description": "Beam length", "quantity": length, "unit": "m"})
 
         if outer_surface:
-            quantities.append({
-                "description": "Beam surface area (for formwork)",
-                "quantity": round(outer_surface, 2),
-                "unit": "m2",
-            })
+            quantities.append({"description": "Beam surface area (for formwork)", "quantity": outer_surface, "unit": "m2"})
 
         return quantities
 
@@ -309,28 +361,19 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate door quantities."""
         quantities = []
-        width = qto.get("Width", 0)
-        height = qto.get("Height", 0)
+        width = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+        height = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
         area = qto.get("Area", 0)
         if not area and width and height:
             area = width * height
 
-        quantities.append({
-            "description": "Door count",
-            "quantity": 1,
-            "unit": "nr",
-        })
-        quantities.append({
-            "description": "Door opening area (for wall deduction)",
-            "quantity": round(area, 2),
-            "unit": "m2",
-        })
+        quantities.append({"description": "Door count", "quantity": 1, "unit": "nr"})
+        quantities.append({"description": "Door opening area (for wall deduction)", "quantity": area, "unit": "m2"})
         quantities.append({
             "description": "Door frame perimeter",
-            "quantity": round(2 * height + width, 2) if height and width else 0,
+            "quantity": (2 * height + width) if height and width else 0,
             "unit": "m",
         })
-
         return quantities
 
     def _calc_window(
@@ -338,28 +381,15 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate window quantities."""
         quantities = []
-        width = qto.get("Width", 0)
-        height = qto.get("Height", 0)
+        width = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+        height = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
         area = qto.get("Area", 0)
         if not area and width and height:
             area = width * height
 
-        quantities.append({
-            "description": "Window count",
-            "quantity": 1,
-            "unit": "nr",
-        })
-        quantities.append({
-            "description": "Window opening area (for wall deduction)",
-            "quantity": round(area, 2),
-            "unit": "m2",
-        })
-        quantities.append({
-            "description": "Window sill length",
-            "quantity": round(width, 2) if width else 0,
-            "unit": "m",
-        })
-
+        quantities.append({"description": "Window count", "quantity": 1, "unit": "nr"})
+        quantities.append({"description": "Window opening area (for wall deduction)", "quantity": area, "unit": "m2"})
+        quantities.append({"description": "Window sill length", "quantity": width, "unit": "m"})
         return quantities
 
     def _calc_stair(
@@ -367,27 +397,14 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate stair quantities."""
         quantities = []
-        volume = qto.get("GrossVolume", 0) or qto.get("NetVolume", 0)
-        area = qto.get("GrossArea", 0) or qto.get("NetArea", 0)
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
 
         if volume:
-            quantities.append({
-                "description": "Stair volume",
-                "quantity": round(volume, 3),
-                "unit": "m3",
-            })
+            quantities.append({"description": "Stair volume", "quantity": volume, "unit": "m3"})
         if area:
-            quantities.append({
-                "description": "Stair area",
-                "quantity": round(area, 2),
-                "unit": "m2",
-            })
-        quantities.append({
-            "description": "Stair count",
-            "quantity": 1,
-            "unit": "nr",
-        })
-
+            quantities.append({"description": "Stair area", "quantity": area, "unit": "m2"})
+        quantities.append({"description": "Stair count", "quantity": 1, "unit": "nr"})
         return quantities
 
     def _calc_roof(
@@ -401,22 +418,13 @@ class CalculatorAgent(BaseAgent):
     ) -> list[dict[str, Any]]:
         """Calculate foundation element quantities."""
         quantities = []
-        volume = qto.get("GrossVolume", 0) or qto.get("NetVolume", 0)
-        area = qto.get("GrossArea", 0) or qto.get("NetArea", 0)
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
 
         if volume:
-            quantities.append({
-                "description": "Foundation volume",
-                "quantity": round(volume, 3),
-                "unit": "m3",
-            })
+            quantities.append({"description": "Foundation volume", "quantity": volume, "unit": "m3"})
         if area:
-            quantities.append({
-                "description": "Foundation area",
-                "quantity": round(area, 2),
-                "unit": "m2",
-            })
-
+            quantities.append({"description": "Foundation area", "quantity": area, "unit": "m2"})
         return quantities
 
     def _calc_generic(
@@ -431,9 +439,5 @@ class CalculatorAgent(BaseAgent):
                         "m" if "length" in key.lower() or "perimeter" in key.lower() else "nr"
                     )
                 )
-                quantities.append({
-                    "description": key,
-                    "quantity": round(float(value), 3),
-                    "unit": unit,
-                })
+                quantities.append({"description": key, "quantity": float(value), "unit": unit})
         return quantities

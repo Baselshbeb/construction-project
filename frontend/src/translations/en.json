@@ -1,0 +1,57 @@
+{
+  "app.title": "Metraj AI",
+  "app.subtitle": "Construction Material Estimation System",
+  "nav.newProject": "New Project",
+
+  "upload.title": "Upload Your Building Model",
+  "upload.description": "Drop an IFC file to automatically generate a Bill of Quantities",
+  "upload.dropActive": "Drop your file here",
+  "upload.dropzone": "Drag & drop your IFC file here",
+  "upload.browse": "or click to browse",
+  "upload.selectFile": "Select IFC File",
+  "upload.invalidFile": "Please upload an .ifc file",
+
+  "steps.upload": "Upload IFC",
+  "steps.uploadDesc": "Building model file",
+  "steps.analyze": "AI Analyzes",
+  "steps.analyzeDesc": "6-step pipeline",
+  "steps.getBOQ": "Get BOQ",
+  "steps.getBOQDesc": "Excel, CSV, JSON",
+
+  "processing.title": "Processing {filename}",
+  "processing.subtitle": "Our AI pipeline is analyzing your building model",
+  "processing.uploading": "Uploading file...",
+
+  "pipeline.parsing": "IFC Parsing",
+  "pipeline.classification": "Classification",
+  "pipeline.calculation": "Quantity Calculation",
+  "pipeline.mapping": "Material Mapping",
+  "pipeline.generation": "BOQ Generation",
+  "pipeline.validation": "Validation",
+
+  "results.elementsParsed": "Elements Parsed",
+  "results.materialsFound": "Materials Found",
+  "results.boqSections": "BOQ Sections",
+  "results.validation": "Validation",
+
+  "download.excel": "Download Excel",
+  "download.csv": "Download CSV",
+  "download.json": "Download JSON",
+  "download.regenerate": "Regenerate in {lang}",
+  "download.regenerating": "Regenerating...",
+
+  "boq.title": "Bill of Quantities",
+  "boq.itemNo": "Item No.",
+  "boq.description": "Description",
+  "boq.unit": "Unit",
+  "boq.quantity": "Quantity",
+
+  "validation.title": "Validation Report",
+  "validation.warnings": "Warnings ({count})",
+
+  "error.title": "Something went wrong",
+  "error.tryAgain": "Try Again",
+  "error.wsConnection": "WebSocket connection failed. Is the backend running?",
+
+  "footer.text": "Metraj AI - Construction Material Estimation System"
+}

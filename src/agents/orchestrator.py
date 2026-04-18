@@ -58,22 +58,44 @@ class Orchestrator(BaseAgent):
         self.validator = ValidatorAgent(llm_service=self.llm_service)
         self.export_service = ExportService()
 
+    SUPPORTED_LANGUAGES = {"en", "tr", "ar"}
+
     async def run(
-        self, ifc_file_path: str, config: dict[str, Any] | None = None
+        self, ifc_file_path: str, config: dict[str, Any] | None = None,
+        language: str = "en",
     ) -> dict[str, Any]:
         """Run the complete pipeline on an IFC file.
 
         Args:
             ifc_file_path: Path to the IFC file.
             config: Optional configuration dict.
+            language: Output language for BOQ/reports ("en", "tr", "ar").
 
         Returns:
             Final ProjectState with all results.
+
+        Raises:
+            FileNotFoundError: If the IFC file does not exist.
+            ValueError: If the language is not supported.
         """
+        # Validate inputs
+        ifc_path = Path(ifc_file_path)
+        if not ifc_path.exists():
+            raise FileNotFoundError(f"IFC file not found: {ifc_file_path}")
+        if not ifc_path.suffix.lower() == ".ifc":
+            raise ValueError(f"Not an IFC file: {ifc_file_path}")
+
+        if language not in self.SUPPORTED_LANGUAGES:
+            raise ValueError(
+                f"Unsupported language '{language}'. "
+                f"Supported: {', '.join(sorted(self.SUPPORTED_LANGUAGES))}"
+            )
+
         # Initialize state
         state: dict[str, Any] = {
             "ifc_file_path": ifc_file_path,
             "project_config": config or {},
+            "language": language,
             "parsed_elements": [],
             "building_info": None,
             "classified_elements": {},
@@ -84,6 +106,8 @@ class Orchestrator(BaseAgent):
             "validation_report": None,
             "warnings": [],
             "errors": [],
+            "failed_elements": [],   # Track elements that failed during processing
+            "skipped_elements": [],  # Track elements skipped due to missing data
             "status": ProcessingStatus.PENDING,
             "current_step": "",
             "processing_log": [],
@@ -122,9 +146,18 @@ class Orchestrator(BaseAgent):
                 self.log_error(f"Pipeline stopped at {step_name} due to errors")
                 break
 
-        # Export reports if pipeline succeeded and BOQ was generated
-        if state.get("boq_data") and state.get("status") != ProcessingStatus.FAILED:
+            # Inter-stage validation gates
+            gate_error = self._validate_stage(step_name, state)
+            if gate_error:
+                self.log_error(f"Stage gate failed after {step_name}: {gate_error}")
+                state["errors"].append(gate_error)
+                state["status"] = ProcessingStatus.FAILED
+                break
+
+        # Export reports only if pipeline completed successfully and BOQ was generated
+        if state.get("boq_data") and state.get("status") == ProcessingStatus.COMPLETED:
             self.log("Exporting reports...")
+            lang = state.get("language", "en")
             try:
                 ifc_name = Path(state["ifc_file_path"]).stem
                 output_dir = Path("output") / ifc_name
@@ -132,13 +165,15 @@ class Orchestrator(BaseAgent):
 
                 # Excel
                 excel_path = self.export_service.export_excel(
-                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.xlsx"
+                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.xlsx",
+                    language=lang,
                 )
                 state["boq_file_paths"]["xlsx"] = str(excel_path)
 
                 # CSV
                 csv_path = self.export_service.export_csv(
-                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.csv"
+                    state["boq_data"], output_dir / f"{ifc_name}_BOQ.csv",
+                    language=lang,
                 )
                 state["boq_file_paths"]["csv"] = str(csv_path)
 
@@ -163,9 +198,100 @@ class Orchestrator(BaseAgent):
         else:
             self.log(f"Pipeline ended with status: {state['status']}")
 
+        # Report failed/skipped elements
+        failed = state.get("failed_elements", [])
+        skipped = state.get("skipped_elements", [])
+        if failed:
+            self.log_warning(f"Failed elements: {len(failed)}")
+        if skipped:
+            self.log_warning(f"Skipped elements: {len(skipped)}")
+
         self.log("Processing log:")
         for entry in state.get("processing_log", []):
             self.log(f"  - {entry}")
         self.log("=" * 50)
 
         return state
+
+    @staticmethod
+    def _validate_stage(step_name: str, state: dict[str, Any]) -> str | None:
+        """Validate state after a pipeline stage. Returns error message or None.
+
+        These are fast, deterministic checks that catch catastrophic failures
+        early — before downstream agents waste time on empty or corrupt data.
+        """
+        if step_name == "IFC Parsing":
+            elements = state.get("parsed_elements", [])
+            if not elements:
+                return (
+                    "IFC Parsing produced no elements. "
+                    "The file may be empty, corrupt, or contain no recognized building elements."
+                )
+            building_info = state.get("building_info")
+            if not building_info:
+                # Non-fatal — add a warning but don't block
+                state["warnings"].append(
+                    "No building metadata found in IFC file (missing IfcProject/IfcBuilding)"
+                )
+
+        elif step_name == "Classification":
+            elements = state.get("parsed_elements", [])
+            classified = state.get("classified_elements", {})
+            total_classified = sum(len(ids) for ids in classified.values())
+            if elements and total_classified == 0:
+                return (
+                    "Classification failed: no elements were classified. "
+                    "AI classification may have returned an invalid response."
+                )
+            # Warn if many elements are unclassified
+            unclassified_count = len(elements) - total_classified
+            if unclassified_count > 0:
+                pct = (unclassified_count / len(elements)) * 100
+                if pct > 50:
+                    return (
+                        f"Classification largely failed: {unclassified_count}/{len(elements)} "
+                        f"elements ({pct:.0f}%) were not classified."
+                    )
+                if pct > 20:
+                    state["warnings"].append(
+                        f"{unclassified_count}/{len(elements)} elements ({pct:.0f}%) "
+                        f"were not classified — BOQ may be incomplete."
+                    )
+
+        elif step_name == "Quantity Calculation":
+            calc_q = state.get("calculated_quantities", [])
+            if not calc_q:
+                return (
+                    "Quantity calculation produced no results. "
+                    "Elements may have no measurable quantities."
+                )
+            # Check for elements with all-zero quantities
+            zero_count = sum(
+                1 for cq in calc_q
+                if all(q.get("quantity", 0) == 0 for q in cq.get("quantities", []))
+            )
+            if zero_count > 0:
+                state["warnings"].append(
+                    f"{zero_count} element(s) have all-zero quantities — "
+                    f"check if IFC quantities are populated."
+                )
+
+        elif step_name == "Material Mapping":
+            materials = state.get("material_list", [])
+            if not materials:
+                return (
+                    "Material mapping produced no materials. "
+                    "AI mapping may have failed for all element types."
+                )
+
+        elif step_name == "BOQ Generation":
+            boq = state.get("boq_data")
+            if not boq:
+                return "BOQ generation produced no output."
+            sections = boq.get("sections", [])
+            if not sections:
+                state["warnings"].append(
+                    "BOQ has no sections — all materials may be uncategorized."
+                )
+
+        return None

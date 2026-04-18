@@ -64,6 +64,26 @@ Respond with a JSON object with this structure:
   "summary": "2-3 sentence overall assessment"
 }}"""
 
+# Language-specific instructions for validator output
+VALIDATOR_LANGUAGE_INSTRUCTIONS = {
+    "en": "",
+    "tr": (
+        "\n\nLANGUAGE: Write ALL issue messages, suggestions, and the "
+        "overall summary in TURKISH. Keep severity levels and category "
+        "keys in English. Keep the JSON structure unchanged."
+    ),
+    "ar": (
+        "\n\nLANGUAGE: Write ALL issue messages, suggestions, and the "
+        "overall summary in ARABIC. Keep severity levels and category "
+        "keys in English. Keep the JSON structure unchanged."
+    ),
+}
+
+
+def get_validator_system_prompt(language: str = "en") -> str:
+    """Build the validator system prompt with language instruction."""
+    return VALIDATOR_SYSTEM_PROMPT + VALIDATOR_LANGUAGE_INSTRUCTIONS.get(language, "")
+
 
 def build_validator_message(
     elements: list[dict[str, Any]],

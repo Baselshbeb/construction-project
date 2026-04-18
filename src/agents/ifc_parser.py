@@ -82,20 +82,57 @@ class IFCParserAgent(BaseAgent):
 
         # Step 3: Extract all building elements
         self.log("Extracting building elements...")
-        raw_elements = service.extract_all_elements()
+        raw_elements, unknown_types = service.extract_all_elements()
+
+        # Warn about unrecognized element types in the IFC file
+        if unknown_types:
+            unknown_summary = ", ".join(
+                f"{t} ({c})" for t, c in sorted(unknown_types.items())
+            )
+            self.log_warning(f"Unrecognized IFC element types (skipped): {unknown_summary}")
+            state["warnings"].append(
+                f"IFC file contains unrecognized element types that were skipped: "
+                f"{unknown_summary}. These elements are not included in the BOQ."
+            )
 
         # Step 4: Convert to ParsedElement models
         parsed_elements = []
+        failed_elements = state.get("failed_elements", [])
+        skipped_elements = state.get("skipped_elements", [])
+
         for raw in raw_elements:
             try:
+                # Validate quantities are numeric
+                clean_quantities: dict[str, float] = {}
+                for qname, qval in raw.get("quantities", {}).items():
+                    try:
+                        clean_quantities[qname] = float(qval)
+                    except (TypeError, ValueError):
+                        self.log_warning(
+                            f"Non-numeric quantity '{qname}={qval}' in element "
+                            f"{raw.get('ifc_id')} — skipping this quantity"
+                        )
+
+                # Filter out "Unknown" materials
+                raw_materials = raw.get("materials", [])
+                clean_materials = [
+                    m for m in raw_materials if m and m != "Unknown"
+                ]
+                if raw_materials and not clean_materials:
+                    skipped_elements.append({
+                        "ifc_id": raw.get("ifc_id"),
+                        "ifc_type": raw.get("ifc_type"),
+                        "reason": "No material info in IFC (was 'Unknown')",
+                    })
+
                 element = ParsedElement(
                     ifc_id=raw["ifc_id"],
                     ifc_type=raw["ifc_type"],
                     name=raw.get("name"),
                     storey=raw.get("storey"),
                     properties=raw.get("properties", {}),
-                    quantities=raw.get("quantities", {}),
-                    materials=raw.get("materials", []),
+                    quantities=clean_quantities,
+                    materials=clean_materials,
                     is_external=raw.get("is_external"),
                 )
                 parsed_elements.append(element)
@@ -103,9 +140,22 @@ class IFCParserAgent(BaseAgent):
                 self.log_warning(
                     f"Skipping element {raw.get('ifc_id')}: {e}"
                 )
+                failed_elements.append({
+                    "ifc_id": raw.get("ifc_id"),
+                    "ifc_type": raw.get("ifc_type"),
+                    "reason": str(e),
+                })
 
         # Step 5: Update state
         state["parsed_elements"] = [e.model_dump() for e in parsed_elements]
+        state["failed_elements"] = failed_elements
+        state["skipped_elements"] = skipped_elements
+
+        if failed_elements:
+            state["warnings"].append(
+                f"{len(failed_elements)} element(s) failed during parsing "
+                f"and were excluded from the BOQ."
+            )
 
         # Log summary
         type_counts: dict[str, int] = {}

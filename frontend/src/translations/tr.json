@@ -1,0 +1,57 @@
+{
+  "app.title": "Metraj AI",
+  "app.subtitle": "Yapı Malzeme Tahmin Sistemi",
+  "nav.newProject": "Yeni Proje",
+
+  "upload.title": "Yapı Modelinizi Yükleyin",
+  "upload.description": "Otomatik metraj oluşturmak için bir IFC dosyası bırakın",
+  "upload.dropActive": "Dosyanızı buraya bırakın",
+  "upload.dropzone": "IFC dosyanızı sürükleyip bırakın",
+  "upload.browse": "veya dosya seçin",
+  "upload.selectFile": "IFC Dosyası Seç",
+  "upload.invalidFile": "Lütfen bir .ifc dosyası yükleyin",
+
+  "steps.upload": "IFC Yükle",
+  "steps.uploadDesc": "Yapı model dosyası",
+  "steps.analyze": "AI Analiz Eder",
+  "steps.analyzeDesc": "6 adımlı işlem",
+  "steps.getBOQ": "Metraj Al",
+  "steps.getBOQDesc": "Excel, CSV, JSON",
+
+  "processing.title": "{filename} İşleniyor",
+  "processing.subtitle": "AI hattımız yapı modelinizi analiz ediyor",
+  "processing.uploading": "Dosya yükleniyor...",
+
+  "pipeline.parsing": "IFC Ayrıştırma",
+  "pipeline.classification": "Sınıflandırma",
+  "pipeline.calculation": "Miktar Hesaplama",
+  "pipeline.mapping": "Malzeme Eşleme",
+  "pipeline.generation": "Metraj Oluşturma",
+  "pipeline.validation": "Doğrulama",
+
+  "results.elementsParsed": "Ayrıştırılan Elemanlar",
+  "results.materialsFound": "Bulunan Malzemeler",
+  "results.boqSections": "Metraj Bölümleri",
+  "results.validation": "Doğrulama",
+
+  "download.excel": "Excel İndir",
+  "download.csv": "CSV İndir",
+  "download.json": "JSON İndir",
+  "download.regenerate": "{lang} dilinde yeniden oluştur",
+  "download.regenerating": "Yeniden oluşturuluyor...",
+
+  "boq.title": "Metraj Listesi",
+  "boq.itemNo": "Sıra No.",
+  "boq.description": "Açıklama",
+  "boq.unit": "Birim",
+  "boq.quantity": "Miktar",
+
+  "validation.title": "Doğrulama Raporu",
+  "validation.warnings": "Uyarılar ({count})",
+
+  "error.title": "Bir sorun oluştu",
+  "error.tryAgain": "Tekrar Dene",
+  "error.wsConnection": "WebSocket bağlantısı başarısız. Sunucu çalışıyor mu?",
+
+  "footer.text": "Metraj AI - Yapı Malzeme Tahmin Sistemi"
+}

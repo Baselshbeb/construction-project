@@ -203,7 +203,7 @@ class IFCService:
                 if mat.Name:
                     materials.append(mat.Name)
 
-        return materials if materials else ["Unknown"]
+        return materials
 
     def get_element_container(self, element) -> Optional[str]:
         """Get the storey/container name for an element."""
@@ -254,6 +254,26 @@ class IFCService:
 
         return data
 
+    def discover_element_types(self) -> dict[str, int]:
+        """Find ALL element types in the IFC file, including unrecognized ones.
+
+        Returns a dict of {ifc_type: count} for all IfcElement subtypes.
+        """
+        all_types: dict[str, int] = {}
+        try:
+            for entity in self.model.by_type("IfcElement"):
+                type_name = entity.is_a()
+                all_types[type_name] = all_types.get(type_name, 0) + 1
+        except Exception as e:
+            logger.warning(f"Element type discovery failed: {e}")
+        return all_types
+
+    def get_unknown_element_types(self) -> dict[str, int]:
+        """Return element types present in the file but NOT in our recognized list."""
+        all_types = self.discover_element_types()
+        known = set(BUILDING_ELEMENT_TYPES)
+        return {t: c for t, c in all_types.items() if t not in known}
+
     def extract_all_elements(self) -> list[dict[str, Any]]:
         """Extract data from ALL building elements.
 
@@ -262,6 +282,15 @@ class IFCService:
         """
         elements = self.get_all_building_elements()
         logger.info(f"Extracting data from {len(elements)} building elements")
+
+        # Warn about unknown element types in the file
+        unknown = self.get_unknown_element_types()
+        if unknown:
+            unknown_summary = ", ".join(f"{t}({c})" for t, c in sorted(unknown.items()))
+            logger.warning(
+                f"IFC file contains unrecognized element types: {unknown_summary}. "
+                f"These elements will be skipped. Consider adding them to BUILDING_ELEMENT_TYPES."
+            )
 
         extracted = []
         for element in elements:
@@ -275,4 +304,4 @@ class IFCService:
                 )
 
         logger.info(f"Successfully extracted {len(extracted)} elements")
-        return extracted
+        return extracted, unknown

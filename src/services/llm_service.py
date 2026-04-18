@@ -68,18 +68,32 @@ class LLMService:
 
         logger.debug(f"Sending request to {model or self.default_model}")
 
+        # Use structured system message with cache_control for prompt caching.
+        # Repeated calls with the same system prompt (e.g. material mapper
+        # batches) get a ~90% discount on cached input tokens.
         response = await self.client.messages.create(
             model=model or self.default_model,
             max_tokens=max_tokens,
             temperature=temperature,
-            system=system_prompt,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{"role": "user", "content": user_message}],
         )
 
         text = response.content[0].text
+        usage = response.usage
+        cache_info = ""
+        if hasattr(usage, "cache_creation_input_tokens"):
+            cache_info = (
+                f", cache_create={usage.cache_creation_input_tokens}, "
+                f"cache_read={usage.cache_read_input_tokens}"
+            )
         logger.debug(
-            f"Response received: {response.usage.input_tokens} in, "
-            f"{response.usage.output_tokens} out"
+            f"Response received: {usage.input_tokens} in, "
+            f"{usage.output_tokens} out{cache_info}"
         )
         return text
 
@@ -90,11 +104,13 @@ class LLMService:
         model: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
+        max_retries: int = 2,
     ) -> dict[str, Any]:
         """Send a message to Claude and parse the response as JSON.
 
         The prompt is enhanced to request JSON output. Claude's response
-        is parsed and returned as a Python dictionary.
+        is parsed and returned as a Python dictionary. On parse failure,
+        retries up to ``max_retries`` times with explicit error feedback.
 
         Args:
             system_prompt: The system instructions.
@@ -102,12 +118,14 @@ class LLMService:
             model: Model override.
             temperature: Creativity level.
             max_tokens: Max response length.
+            max_retries: Number of retries on JSON parse failure.
 
         Returns:
             Parsed JSON as a dictionary.
 
         Raises:
-            ValueError: If Claude's response cannot be parsed as JSON.
+            ValueError: If Claude's response cannot be parsed as JSON
+                        after all retries.
         """
         enhanced_system = (
             system_prompt
@@ -115,47 +133,101 @@ class LLMService:
             "No markdown, no explanation, just the JSON object."
         )
 
-        text = await self.ask(
-            system_prompt=enhanced_system,
-            user_message=user_message,
-            model=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        last_error = ""
+        for attempt in range(1 + max_retries):
+            # On retry, append the parse error so Claude can self-correct
+            if attempt == 0:
+                msg = user_message
+            else:
+                msg = (
+                    f"{user_message}\n\n"
+                    f"[RETRY {attempt}/{max_retries}] Your previous response "
+                    f"was not valid JSON. Error: {last_error}\n"
+                    "Please respond with ONLY a valid JSON object."
+                )
 
-        # Try to extract JSON from the response
+            text = await self.ask(
+                system_prompt=enhanced_system,
+                user_message=msg,
+                model=model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            parsed = self._extract_json(text)
+            if parsed is not None:
+                return parsed
+
+            last_error = f"Could not parse JSON from: {text[:150]}..."
+            logger.warning(f"JSON parse failed (attempt {attempt + 1}): {last_error}")
+
+        logger.error(f"Failed to parse JSON after {1 + max_retries} attempts")
+        raise ValueError(f"Could not parse JSON from Claude after retries: {last_error}")
+
+    @staticmethod
+    def _extract_json(text: str) -> Optional[dict[str, Any]]:
+        """Try to extract a JSON object from Claude's response text.
+
+        Uses a careful approach: first try direct parse, then strip markdown
+        fences, then find the outermost balanced braces.
+        """
         text = text.strip()
 
         # Remove markdown code fences if present
         if text.startswith("```"):
             lines = text.split("\n")
-            # Remove first line (```json) and last line (```)
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines)
+            # Only remove lines that are purely code fence markers
+            cleaned = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("```"):
+                    continue
+                cleaned.append(line)
+            text = "\n".join(cleaned).strip()
 
+        # Attempt 1: direct parse
         try:
-            return json.loads(text)
+            result = json.loads(text)
+            if isinstance(result, dict):
+                return result
+            if isinstance(result, list):
+                return {"items": result}
         except json.JSONDecodeError:
-            # Try to find JSON within the text
-            json_start = text.find("{")
-            json_end = text.rfind("}") + 1
-            if json_start != -1 and json_end > json_start:
-                try:
-                    return json.loads(text[json_start:json_end])
-                except json.JSONDecodeError:
-                    pass
+            pass
 
-            # Try array
-            json_start = text.find("[")
-            json_end = text.rfind("]") + 1
-            if json_start != -1 and json_end > json_start:
-                try:
-                    return {"items": json.loads(text[json_start:json_end])}
-                except json.JSONDecodeError:
-                    pass
+        # Attempt 2: find outermost balanced braces
+        brace_start = text.find("{")
+        if brace_start != -1:
+            depth = 0
+            for i in range(brace_start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[brace_start:i + 1]
+                        try:
+                            return json.loads(candidate)
+                        except json.JSONDecodeError:
+                            break
 
-            logger.error(f"Failed to parse JSON from response: {text[:200]}...")
-            raise ValueError(f"Could not parse JSON from Claude's response: {text[:200]}")
+        # Attempt 3: find outermost array (wrap as dict)
+        bracket_start = text.find("[")
+        if bracket_start != -1:
+            depth = 0
+            for i in range(bracket_start, len(text)):
+                if text[i] == "[":
+                    depth += 1
+                elif text[i] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[bracket_start:i + 1]
+                        try:
+                            return {"items": json.loads(candidate)}
+                        except json.JSONDecodeError:
+                            break
+
+        return None
 
     async def ask_with_context(
         self,
@@ -188,7 +260,11 @@ class LLMService:
             model=model or self.default_model,
             max_tokens=max_tokens,
             temperature=temperature,
-            system=system_prompt,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=messages,
         )
 

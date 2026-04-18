@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.agents.base_agent import BaseAgent
+from src.models.ai_responses import ClassifierResponse
 from src.models.project import ElementCategory, ProcessingStatus
 from src.prompts.classifier_prompts import (
     CLASSIFIER_SYSTEM_PROMPT,
@@ -58,31 +59,51 @@ class ClassifierAgent(BaseAgent):
         elements = state.get("parsed_elements", [])
         if not elements:
             self.log_warning("No elements to classify!")
+            state["warnings"].append("No elements found to classify")
             return state
 
-        # Build the prompt message
-        user_message = build_classifier_message(elements)
+        # Batch elements to avoid exceeding LLM token limits
+        BATCH_SIZE = 50
+        batches = [elements[i:i + BATCH_SIZE] for i in range(0, len(elements), BATCH_SIZE)]
+        self.log(f"Classifying {len(elements)} elements in {len(batches)} batch(es)")
 
-        # Call Claude AI
-        try:
-            ai_result = await self.llm.ask_json(
-                system_prompt=CLASSIFIER_SYSTEM_PROMPT,
-                user_message=user_message,
-                temperature=0.0,
-            )
-        except Exception as e:
-            self.log_error(f"AI classification failed: {e}")
-            state["warnings"].append(f"AI classification failed: {e}")
-            state["errors"].append("Classification failed - no AI response")
-            return state
+        # Collect AI results across all batches
+        normalized_result: dict[str, str] = {}
+        for batch_idx, batch in enumerate(batches):
+            user_message = build_classifier_message(batch)
 
-        # Apply classifications from AI response
+            try:
+                ai_result = await self.llm.ask_json(
+                    system_prompt=CLASSIFIER_SYSTEM_PROMPT,
+                    user_message=user_message,
+                    temperature=0.0,
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=4096,
+                )
+            except Exception as e:
+                self.log_error(f"AI classification failed for batch {batch_idx + 1}: {e}")
+                state["warnings"].append(
+                    f"AI classification failed for batch {batch_idx + 1}/{len(batches)}: {e}"
+                )
+                continue
+
+            # Validate and normalize AI response through Pydantic model
+            try:
+                validated = ClassifierResponse.from_raw(ai_result)
+                normalized_result.update(validated.classifications)
+            except Exception as ve:
+                self.log_warning(f"AI response validation issue in batch {batch_idx + 1}: {ve}")
+                # Fall back to raw normalization
+                for k, v in ai_result.items():
+                    if isinstance(v, str) and v in VALID_CATEGORIES:
+                        normalized_result[str(k)] = v
+
         classified: dict[str, list[int]] = {}
         unclassified = []
 
         for element in elements:
             elem_id = str(element["ifc_id"])
-            category_str = ai_result.get(elem_id)
+            category_str = normalized_result.get(elem_id)
 
             if category_str and category_str in VALID_CATEGORIES:
                 element["category"] = category_str

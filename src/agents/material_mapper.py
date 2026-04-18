@@ -17,11 +17,14 @@ Output: ProjectState with material_list filled in
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from src.agents.base_agent import BaseAgent
+from src.models.ai_responses import MapperResponse
 from src.models.project import ProcessingStatus
 from src.prompts.material_mapper_prompts import (
     build_mapper_message,
@@ -33,6 +36,39 @@ from src.utils.logger import get_logger
 logger = get_logger("material_mapper")
 
 DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+def _normalize_material_name(name: str) -> str:
+    """Normalize a material name for deduplication.
+
+    Handles common AI inconsistencies like:
+      "Internal plaster" vs "Interior plaster" vs "Plaster (internal)"
+      "Concrete C25/30" vs "Concrete C 25/30" vs "Concrete C25/30 (C25)"
+      "Reinforcement steel" vs "Reinforcement Steel" vs "Steel reinforcement"
+
+    Returns a lowercase, whitespace-collapsed, parenthetical-stripped key.
+    """
+    s = name.strip()
+    # Normalize unicode (handles accented chars in Turkish/Arabic)
+    s = unicodedata.normalize("NFKC", s)
+    # Lowercase
+    s = s.lower()
+    # Remove content in parentheses: "concrete c25/30 (pumped)" -> "concrete c25/30"
+    s = re.sub(r"\s*\([^)]*\)", "", s)
+    # Normalize common synonyms
+    synonyms = {
+        "interior": "internal",
+        "exterior": "external",
+        "int.": "internal",
+        "ext.": "external",
+        "reinf.": "reinforcement",
+        "reinf ": "reinforcement ",
+    }
+    for old, new in synonyms.items():
+        s = s.replace(old, new)
+    # Collapse whitespace and strip
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _load_json(filename: str) -> dict:
@@ -56,17 +92,13 @@ class MaterialMapperAgent(BaseAgent):
         self.waste_factors = _load_json("waste_factors.json")
         self.element_rules = _load_json("element_rules.json")
 
-        # Build the system prompt with reference data injected
-        self.system_prompt = get_mapper_system_prompt(
-            self.waste_factors, self.element_rules
-        )
-
     async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
         """Map all elements to their required materials using AI."""
         self.log("Starting AI material mapping...")
         state["status"] = ProcessingStatus.MAPPING_MATERIALS
         state["current_step"] = "Mapping materials"
 
+        language = state.get("language", "en")
         elements = state.get("parsed_elements", [])
         calc_quantities = state.get("calculated_quantities", [])
 
@@ -82,10 +114,23 @@ class MaterialMapperAgent(BaseAgent):
         # Group elements by IFC type for batching
         batches = self._group_by_type(elements)
 
-        all_materials: list[dict[str, Any]] = []
-        total_batches = len(batches)
+        # Build system prompt with language for this execution
+        system_prompt = get_mapper_system_prompt(
+            self.waste_factors, self.element_rules, language=language,
+        )
 
-        for i, (type_name, batch_elements) in enumerate(batches.items()):
+        all_materials: list[dict[str, Any]] = []
+
+        # Split large type groups into sub-batches of max 50 elements
+        MAX_BATCH_SIZE = 50
+        flat_batches: list[tuple[str, list[dict]]] = []
+        for type_name, type_elements in batches.items():
+            for j in range(0, len(type_elements), MAX_BATCH_SIZE):
+                flat_batches.append((type_name, type_elements[j:j + MAX_BATCH_SIZE]))
+
+        total_batches = len(flat_batches)
+
+        for i, (type_name, batch_elements) in enumerate(flat_batches):
             self.log(f"  Mapping batch {i + 1}/{total_batches}: {type_name} ({len(batch_elements)} elements)")
 
             # Build enriched element data with quantities attached
@@ -105,7 +150,7 @@ class MaterialMapperAgent(BaseAgent):
 
             try:
                 ai_result = await self.llm.ask_json(
-                    system_prompt=self.system_prompt,
+                    system_prompt=system_prompt,
                     user_message=user_message,
                     temperature=0.0,
                     max_tokens=8192,
@@ -117,10 +162,16 @@ class MaterialMapperAgent(BaseAgent):
                 )
                 continue
 
-            # Process AI response
-            for elem_result in ai_result.get("elements", []):
+            # Validate and process AI response through Pydantic model
+            try:
+                validated = MapperResponse.from_raw(ai_result)
+            except Exception as ve:
+                self.log_warning(f"AI response validation issue for {type_name}: {ve}")
+                validated = MapperResponse(elements=[])
+
+            for elem_result in validated.elements:
                 materials = self._process_ai_materials(
-                    elem_result, qty_lookup, elements
+                    elem_result.model_dump(), qty_lookup, elements
                 )
                 all_materials.extend(materials)
 
@@ -226,9 +277,9 @@ class MaterialMapperAgent(BaseAgent):
         return {
             "description": name,
             "unit": unit,
-            "quantity": round(base_quantity, 3),
+            "quantity": base_quantity,
             "waste_factor": waste,
-            "total_quantity": total_quantity,
+            "total_quantity": base_quantity * (1 + waste),
             "category": element.get("category"),
             "source_elements": [element["ifc_id"]],
             "notes": rule.get("note"),
@@ -255,33 +306,56 @@ class MaterialMapperAgent(BaseAgent):
         """Combine same materials across all elements.
 
         E.g., if 8 walls each need 'Concrete C25/30', sum them into one entry.
+        Waste factors are tracked per-item: we sum base quantities and
+        total_quantities independently to preserve correct waste accounting
+        even when items have different waste rates.
         """
         aggregated: dict[str, dict[str, Any]] = {}
 
         for mat in materials:
-            key = f"{mat['description']}|{mat['unit']}"
+            # Use normalized name for aggregation key to merge near-duplicates
+            norm_name = _normalize_material_name(mat["description"])
+            key = f"{norm_name}|{mat['unit']}"
             if key not in aggregated:
                 aggregated[key] = {
                     "description": mat["description"],
                     "unit": mat["unit"],
                     "quantity": 0,
                     "total_quantity": 0,
-                    "waste_factor": mat["waste_factor"],
+                    "waste_factor": 0.0,
                     "category": mat["category"],
                     "source_elements": [],
                     "notes": mat.get("notes"),
+                    "_waste_contributions": [],
                 }
             aggregated[key]["quantity"] += mat["quantity"]
             aggregated[key]["total_quantity"] += mat["total_quantity"]
             aggregated[key]["source_elements"].extend(mat["source_elements"])
+            aggregated[key]["_waste_contributions"].append(
+                (mat["quantity"], mat["waste_factor"])
+            )
 
-        # Round final values
+        # Round final values and compute weighted-average waste factor
         result = []
         for item in aggregated.values():
             item["quantity"] = round(item["quantity"], 2)
             item["total_quantity"] = round(item["total_quantity"], 2)
-            # Deduplicate source elements
-            item["source_elements"] = list(set(item["source_elements"]))
+
+            # Weighted average waste factor (weight = base quantity)
+            contributions = item.pop("_waste_contributions")
+            total_base = sum(qty for qty, _ in contributions) or 1.0
+            item["waste_factor"] = round(
+                sum(qty * wf for qty, wf in contributions) / total_base, 4
+            )
+
+            # Deduplicate source elements preserving order
+            seen = set()
+            unique = []
+            for eid in item["source_elements"]:
+                if eid not in seen:
+                    seen.add(eid)
+                    unique.append(eid)
+            item["source_elements"] = unique
             result.append(item)
 
         # Sort by category then description

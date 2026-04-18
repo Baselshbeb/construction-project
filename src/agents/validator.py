@@ -19,10 +19,11 @@ from __future__ import annotations
 from typing import Any
 
 from src.agents.base_agent import BaseAgent
+from src.models.ai_responses import ValidatorResponse
 from src.models.project import ProcessingStatus
 from src.prompts.validator_prompts import (
-    VALIDATOR_SYSTEM_PROMPT,
     build_validator_message,
+    get_validator_system_prompt,
 )
 from src.services.llm_service import LLMService
 from src.utils.logger import get_logger
@@ -227,9 +228,10 @@ class ValidatorAgent(BaseAgent):
     async def _ai_validate(self, state: dict[str, Any]) -> dict[str, Any] | None:
         """Run AI-powered intelligent validation on the full BOQ.
 
-        Returns the AI's assessment or None if the call fails.
+        Returns the AI's assessment as a validated dict, or None if the call fails.
         """
         try:
+            language = state.get("language", "en")
             user_message = build_validator_message(
                 elements=state.get("parsed_elements", []),
                 materials=state.get("material_list", []),
@@ -238,11 +240,15 @@ class ValidatorAgent(BaseAgent):
                 calc_quantities=state.get("calculated_quantities"),
             )
 
-            result = await self.llm.ask_json(
-                system_prompt=VALIDATOR_SYSTEM_PROMPT,
+            raw_result = await self.llm.ask_json(
+                system_prompt=get_validator_system_prompt(language),
                 user_message=user_message,
                 temperature=0.1,
             )
+
+            # Validate through Pydantic model
+            validated = ValidatorResponse.from_raw(raw_result)
+            result = validated.model_dump()
 
             self.log(f"  AI assessment: {result.get('overall_assessment', 'N/A')}")
             if result.get("summary"):
