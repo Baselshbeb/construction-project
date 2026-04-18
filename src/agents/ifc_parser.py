@@ -23,6 +23,7 @@ from src.agents.base_agent import BaseAgent
 from src.models.project import BuildingInfo, ParsedElement, ProcessingStatus
 from src.services.geometry_service import GeometryService
 from src.services.ifc_service import IFCService
+from src.services.rebar_service import RebarService
 
 
 class IFCParserAgent(BaseAgent):
@@ -81,9 +82,15 @@ class IFCParserAgent(BaseAgent):
             f"{building_info.total_entities} entities"
         )
 
-        # Step 3: Initialize geometry service for 3D fallback
+        # Step 3: Initialize geometry and rebar services
         self.log("Initializing geometry engine...")
         geo_service = GeometryService(service.model)
+
+        self.log("Extracting reinforcement data...")
+        rebar_service = RebarService(service.model)
+        rebar_data = rebar_service.extract_rebar_data()
+        if rebar_data:
+            self.log(f"Found reinforcement data for {len(rebar_data)} element(s)")
 
         # Step 4: Extract all building elements (with geometry fallback)
         self.log("Extracting building elements...")
@@ -139,14 +146,21 @@ class IFCParserAgent(BaseAgent):
                         "reason": "No material info in IFC (was 'Unknown')",
                     })
 
+                # Merge reinforcement data from IFC if available
+                elem_id = raw["ifc_id"]
+                reinforcement = rebar_data.get(elem_id, {})
+
                 element = ParsedElement(
-                    ifc_id=raw["ifc_id"],
+                    ifc_id=elem_id,
                     ifc_type=raw["ifc_type"],
                     name=raw.get("name"),
                     storey=raw.get("storey"),
                     properties=raw.get("properties", {}),
                     quantities=clean_quantities,
                     materials=clean_materials,
+                    material_layers=raw.get("material_layers", []),
+                    openings=raw.get("openings", []),
+                    quantity_source=raw.get("quantity_source", "qto"),
                     is_external=raw.get("is_external"),
                 )
                 parsed_elements.append(element)
@@ -160,8 +174,17 @@ class IFCParserAgent(BaseAgent):
                     "reason": str(e),
                 })
 
-        # Step 5: Update state
-        state["parsed_elements"] = [e.model_dump() for e in parsed_elements]
+        # Step 5: Update state — serialize and merge rebar data
+        serialized_elements = []
+        for elem in parsed_elements:
+            elem_dict = elem.model_dump()
+            # Merge reinforcement data into element dict
+            elem_rebar = rebar_data.get(elem.ifc_id, {})
+            if elem_rebar:
+                elem_dict["reinforcement"] = elem_rebar
+            serialized_elements.append(elem_dict)
+
+        state["parsed_elements"] = serialized_elements
         state["failed_elements"] = failed_elements
         state["skipped_elements"] = skipped_elements
 

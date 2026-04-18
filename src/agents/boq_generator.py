@@ -146,10 +146,16 @@ class BOQGeneratorAgent(BaseAgent):
         confidence_svc = ConfidenceService()
         elements = state.get("parsed_elements", [])
 
-        # Score each source element
+        # Build calculator data lookup for confidence scoring
+        calc_quantities = state.get("calculated_quantities", [])
+        calc_lookup: dict[int, dict] = {}
+        for cq in calc_quantities:
+            calc_lookup[cq["element_id"]] = cq
+
+        # Score each source element with actual calculator data
         element_scores: dict[int, dict] = {}
         for elem in elements:
-            calc_data = {}  # Calculator data not needed for element-level scoring
+            calc_data = calc_lookup.get(elem["ifc_id"], {})
             elem_score = confidence_svc.score_element_quantities(elem, calc_data)
             element_scores[elem["ifc_id"]] = elem_score
 

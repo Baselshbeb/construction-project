@@ -464,6 +464,26 @@ async def download_report(project_id: str, format: str):
     )
 
 
+# ---------- Project Logs ----------
+
+@app.get("/api/projects/{project_id}/logs")
+async def get_project_logs(project_id: str):
+    """Retrieve the per-project pipeline log file."""
+    from src.utils.project_logger import ProjectLogger
+
+    plog = ProjectLogger(project_id)
+    log_path = Path(plog.get_log_path())
+
+    if not log_path.exists():
+        raise HTTPException(404, "No log file found for this project")
+
+    return FileResponse(
+        path=str(log_path),
+        media_type="text/plain",
+        filename=f"{project_id}_pipeline.log",
+    )
+
+
 # ---------- BOQ Editing & Learning ----------
 
 

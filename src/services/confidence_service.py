@@ -30,12 +30,12 @@ PENALTIES = {
     # Opening deduction method
     "opening_qto": 0.0,
     "opening_per_wall": 0.0,
-    "opening_storey_avg": 0.08,
+    "opening_storey_avg": 0.03,
     "opening_none": 0.12,
 
     # Reinforcement source
     "rebar_ifc_detailed": 0.0,
-    "rebar_ratio_based": 0.08,
+    "rebar_ratio_based": 0.02,
     "rebar_none": 0.0,  # no penalty if element doesn't need rebar
 
     # Material mapping source
@@ -45,7 +45,7 @@ PENALTIES = {
 
     # Element type coverage
     "element_has_dedicated_calc": 0.0,
-    "element_generic_calc": 0.15,
+    "element_generic_calc": 0.07,
 }
 
 # Thresholds for level classification
@@ -175,8 +175,9 @@ class ConfidenceService:
                 review_needed=True,
             )
 
-        # Worst-case score among contributing elements
-        min_score = min(scores)
+        # Weighted average score (more realistic than worst-case)
+        # Each element contributes equally since we don't have per-element quantities here
+        min_score = sum(scores) / len(scores)
 
         # Deduplicate factors
         unique_factors = list(dict.fromkeys(all_factors))

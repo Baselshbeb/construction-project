@@ -34,6 +34,7 @@ from src.models.project import ProcessingStatus
 from src.services.export_service import ExportService
 from src.services.llm_service import LLMService
 from src.utils.logger import get_logger
+from src.utils.project_logger import ProjectLogger
 
 logger = get_logger("orchestrator")
 
@@ -117,6 +118,16 @@ class Orchestrator(BaseAgent):
 
     async def execute(self, state: dict[str, Any]) -> dict[str, Any]:
         """Execute the full pipeline."""
+        import time as _time
+        pipeline_start = _time.time()
+
+        # Initialize per-project logger
+        ifc_path = state.get("ifc_file_path", "")
+        project_id = Path(ifc_path).stem if ifc_path else "unknown"
+        plog = ProjectLogger(project_id)
+        state["_project_logger"] = plog
+        plog.log_step("Pipeline", f"Starting Metraj Pipeline for {Path(ifc_path).name}")
+
         self.log("=" * 50)
         self.log("Starting Metraj Pipeline")
         self.log("=" * 50)
@@ -145,6 +156,8 @@ class Orchestrator(BaseAgent):
 
             self.log(f"Step: {step_name}...")
             resume_from = None  # Clear after reaching resume point
+            step_start = _time.time()
+            plog.log_step(step_name, "Starting")
 
             try:
                 state = await agent.execute(state)
@@ -153,8 +166,11 @@ class Orchestrator(BaseAgent):
                 state["errors"].append(f"Pipeline failed at {step_name}: {e}")
                 state["status"] = ProcessingStatus.FAILED
                 state["_last_completed_step"] = completed_steps[-1] if completed_steps else None
+                plog.log_error(step_name, str(e))
                 break
 
+            step_elapsed = _time.time() - step_start
+            plog.log_step(step_name, f"Completed in {step_elapsed:.1f}s")
             completed_steps.append(step_name)
 
             # Check if previous step failed
@@ -168,7 +184,10 @@ class Orchestrator(BaseAgent):
                 self.log_error(f"Stage gate failed after {step_name}: {gate_error}")
                 state["errors"].append(gate_error)
                 state["status"] = ProcessingStatus.FAILED
+                plog.log_validation(f"Gate:{step_name}", False, message=gate_error)
                 break
+            else:
+                plog.log_validation(f"Gate:{step_name}", True)
 
             # Checkpoint: record last successful step
             state["_last_completed_step"] = step_name
@@ -211,6 +230,8 @@ class Orchestrator(BaseAgent):
                 state["warnings"].append(f"Report export failed: {e}")
 
         # Final summary
+        pipeline_elapsed = _time.time() - pipeline_start
+
         self.log("=" * 50)
         if state["status"] == ProcessingStatus.COMPLETED:
             self.log("Pipeline COMPLETED successfully")
@@ -229,6 +250,19 @@ class Orchestrator(BaseAgent):
         for entry in state.get("processing_log", []):
             self.log(f"  - {entry}")
         self.log("=" * 50)
+
+        # Write per-project summary log
+        boq_data = state.get("boq_data") or {}
+        plog.log_summary(
+            total_elements=len(state.get("parsed_elements", [])),
+            total_materials=len(state.get("material_list", [])),
+            total_boq_items=boq_data.get("total_line_items", 0),
+            confidence_summary=boq_data.get("confidence_summary", {}),
+            warnings=state.get("warnings", []),
+            errors=state.get("errors", []),
+            duration_seconds=pipeline_elapsed,
+        )
+        state["_project_log_path"] = plog.get_log_path()
 
         return state
 

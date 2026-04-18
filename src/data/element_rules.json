@@ -11,7 +11,8 @@
         {"name": "External plaster (cement render)", "unit": "m2", "source": "External face area (for ext. plaster/paint)", "waste": "plaster.external"},
         {"name": "Internal plaster", "unit": "m2", "source": "Internal face area (for plaster/paint)", "waste": "plaster.internal"},
         {"name": "External paint", "unit": "m2", "source": "External face area (for ext. plaster/paint)", "waste": "paint.standard"},
-        {"name": "Internal paint", "unit": "m2", "source": "Internal face area (for plaster/paint)", "waste": "paint.standard"}
+        {"name": "Internal paint", "unit": "m2", "source": "Internal face area (for plaster/paint)", "waste": "paint.standard"},
+        {"name": "Thermal insulation (EPS/XPS, 50mm)", "unit": "m2", "source": "External face area (for ext. plaster/paint)", "multiplier": 1.0, "waste_key": "insulation.standard", "note": "External wall insulation"}
       ]
     },
     "brick_internal": {
@@ -20,7 +21,8 @@
         {"name": "Clay bricks (standard)", "unit": "nr", "source": "Net wall area (minus openings, one side)", "multiplier": 50, "waste": "bricks.standard", "note": "~50 bricks per m2 for 100mm wall"},
         {"name": "Mortar (brick laying)", "unit": "m3", "source": "Net wall area (minus openings, one side)", "multiplier": 0.03, "waste": "mortar.standard", "note": "~0.03 m3 per m2"},
         {"name": "Internal plaster (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "plaster.internal"},
-        {"name": "Internal paint (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "paint.standard"}
+        {"name": "Internal paint (both sides)", "unit": "m2", "source": "Net wall area (both sides, for plaster/paint)", "waste": "paint.standard"},
+        {"name": "Damp proof course (DPC)", "unit": "m", "source": "Wall length (for skirting/coving)", "multiplier": 1.0, "waste_key": "waterproofing.standard", "note": "DPC at base of brick walls"}
       ]
     },
     "concrete_internal": {
@@ -42,7 +44,8 @@
         {"name": "Reinforcement steel", "unit": "kg", "source": "Slab volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for slabs"},
         {"name": "Formwork (slab)", "unit": "m2", "source": "Formwork area (soffit + edges)", "waste": "formwork.standard"},
         {"name": "Floor screed (50mm)", "unit": "m2", "source": "Slab area (top face)", "waste": "screed.standard"},
-        {"name": "Ceiling plaster (soffit)", "unit": "m2", "source": "Slab area (bottom face / soffit)", "waste": "plaster.internal"}
+        {"name": "Ceiling plaster (soffit)", "unit": "m2", "source": "Slab area (bottom face / soffit)", "waste": "plaster.internal"},
+        {"name": "Waterproofing membrane (DPM)", "unit": "m2", "source": "Slab area (top face)", "multiplier": 1.0, "waste_key": "waterproofing.standard", "note": "For ground-contact slabs"}
       ]
     }
   },
@@ -91,7 +94,7 @@
       "materials": [
         {"name": "Concrete C30/37", "unit": "m3", "source": "Stair volume", "multiplier": 1.0, "waste": "concrete.standard"},
         {"name": "Reinforcement steel", "unit": "kg", "source": "Stair volume", "multiplier": 110, "waste": "reinforcement_steel.standard", "note": "~110 kg/m3 for stairs"},
-        {"name": "Formwork (stair)", "unit": "m2", "source": "Stair area", "multiplier": 2.5, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
+        {"name": "Formwork (stair)", "unit": "m2", "source": "Stair area", "multiplier": 18.0, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
         {"name": "Anti-slip nosing", "unit": "nr", "source": "Stair count", "multiplier": 12, "waste_value": 0, "note": "~12 nosings per flight"},
         {"name": "Handrail", "unit": "m", "source": "Stair area", "multiplier": 3.0, "waste_value": 0, "note": "~3m handrail per flight"}
       ]
@@ -103,7 +106,7 @@
       "materials": [
         {"name": "Concrete C30/37", "unit": "m3", "source": "Stair volume", "multiplier": 1.0, "waste": "concrete.standard"},
         {"name": "Reinforcement steel", "unit": "kg", "source": "Stair volume", "multiplier": 120, "waste": "reinforcement_steel.standard", "note": "~120 kg/m3 for stair flights"},
-        {"name": "Formwork (stair flight)", "unit": "m2", "source": "Stair area", "multiplier": 2.5, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
+        {"name": "Formwork (stair flight)", "unit": "m2", "source": "Stair area", "multiplier": 18.0, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
         {"name": "Anti-slip nosing", "unit": "nr", "source": "Stair count", "multiplier": 12, "waste_value": 0, "note": "~12 nosings per flight"},
         {"name": "Handrail", "unit": "m", "source": "Stair area", "multiplier": 3.0, "waste_value": 0, "note": "~3m handrail per flight"}
       ]
@@ -115,7 +118,7 @@
       "materials": [
         {"name": "Concrete C30/37", "unit": "m3", "source": "Ramp volume", "multiplier": 1.0, "waste": "concrete.standard"},
         {"name": "Reinforcement steel", "unit": "kg", "source": "Ramp volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for ramps"},
-        {"name": "Formwork (ramp)", "unit": "m2", "source": "Ramp area", "multiplier": 1.5, "waste": "formwork.standard", "note": "Simpler formwork than stairs"},
+        {"name": "Formwork (ramp)", "unit": "m2", "source": "Ramp area", "multiplier": 10.0, "waste": "formwork.standard", "note": "Simpler formwork than stairs"},
         {"name": "Non-slip surface treatment", "unit": "m2", "source": "Ramp area", "multiplier": 1.0, "waste_value": 0.05},
         {"name": "Handrail", "unit": "m", "source": "Ramp area", "multiplier": 2.0, "waste_value": 0, "note": "Both sides of ramp"}
       ]
@@ -127,7 +130,7 @@
       "materials": [
         {"name": "Concrete C30/37", "unit": "m3", "source": "Ramp volume", "multiplier": 1.0, "waste": "concrete.standard"},
         {"name": "Reinforcement steel", "unit": "kg", "source": "Ramp volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for ramp flights"},
-        {"name": "Formwork (ramp flight)", "unit": "m2", "source": "Ramp area", "multiplier": 1.5, "waste": "formwork.standard"},
+        {"name": "Formwork (ramp flight)", "unit": "m2", "source": "Ramp area", "multiplier": 10.0, "waste": "formwork.standard"},
         {"name": "Non-slip surface treatment", "unit": "m2", "source": "Ramp area", "multiplier": 1.0, "waste_value": 0.05}
       ]
     }
@@ -209,7 +212,8 @@
         {"name": "Concrete C30/37", "unit": "m3", "source": "Footing volume", "multiplier": 1.0, "waste": "concrete.foundation"},
         {"name": "Reinforcement steel", "unit": "kg", "source": "Footing volume", "multiplier": 90, "waste": "reinforcement_steel.standard", "note": "~90 kg/m3 for footings"},
         {"name": "Formwork (footing)", "unit": "m2", "source": "Footing surface area", "multiplier": 1.0, "waste": "formwork.standard"},
-        {"name": "Blinding concrete (50mm)", "unit": "m2", "source": "Footing area (base)", "multiplier": 1.0, "waste": "concrete.standard"}
+        {"name": "Blinding concrete (50mm)", "unit": "m2", "source": "Footing area (base)", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Waterproofing membrane", "unit": "m2", "source": "Foundation area", "multiplier": 1.0, "waste_key": "waterproofing.standard"}
       ]
     }
   },

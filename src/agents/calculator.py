@@ -132,7 +132,12 @@ class CalculatorAgent(BaseAgent):
             wall_area = wall_gross_area_by_storey[storey]
             opening_area = opening_area_by_storey.get(storey, 0)
             if wall_area > 0 and opening_area > 0:
-                ratio = min(opening_area / wall_area, 0.6)  # cap at 60%
+                ratio = min(opening_area / wall_area, 0.80)  # cap at 80%
+                if ratio > 0.75:
+                    self.log_warning(
+                        f"  Storey '{storey}': high opening ratio {ratio:.0%} — "
+                        f"verify facade design is correct"
+                    )
                 self._opening_ratio_by_storey[storey] = ratio
                 self.log(
                     f"  Storey '{storey}': opening ratio = {ratio:.1%} "
@@ -395,7 +400,7 @@ class CalculatorAgent(BaseAgent):
         quantities.append({"description": "Door opening area (for wall deduction)", "quantity": area, "unit": "m2"})
         quantities.append({
             "description": "Door frame perimeter",
-            "quantity": (2 * height + width) if height and width else 0,
+            "quantity": 2 * (height + width) if height and width else 0,
             "unit": "m",
         })
         return quantities

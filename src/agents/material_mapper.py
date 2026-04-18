@@ -30,6 +30,8 @@ from src.prompts.material_mapper_prompts import (
     build_mapper_message,
     get_mapper_system_prompt,
 )
+from src.services.database import Database
+from src.services.learning_service import LearningService
 from src.services.llm_service import LLMService
 from src.utils.logger import get_logger
 
@@ -106,6 +108,14 @@ class MaterialMapperAgent(BaseAgent):
             self.log_warning("No elements or quantities to map!")
             return state
 
+        # Query learned overrides from previous user corrections
+        try:
+            learning_db = Database()
+            await learning_db.initialize()
+            learning_svc = LearningService(learning_db)
+        except Exception:
+            learning_svc = None
+
         # Build lookup: element_id -> calculated quantities
         qty_lookup: dict[int, list[dict]] = {}
         for cq in calc_quantities:
@@ -133,10 +143,10 @@ class MaterialMapperAgent(BaseAgent):
         for i, (type_name, batch_elements) in enumerate(flat_batches):
             self.log(f"  Mapping batch {i + 1}/{total_batches}: {type_name} ({len(batch_elements)} elements)")
 
-            # Build enriched element data with quantities attached
+            # Build enriched element data with quantities, layers, and rebar attached
             enriched = []
             for elem in batch_elements:
-                enriched.append({
+                entry: dict[str, Any] = {
                     "element_id": elem["ifc_id"],
                     "ifc_type": elem["ifc_type"],
                     "name": elem.get("name"),
@@ -144,13 +154,44 @@ class MaterialMapperAgent(BaseAgent):
                     "category": elem.get("category"),
                     "ifc_materials": elem.get("materials", []),
                     "quantities": qty_lookup.get(elem["ifc_id"], []),
-                })
+                }
+                # Include material layers with thicknesses when available
+                layers = elem.get("material_layers", [])
+                if layers:
+                    entry["material_layers"] = layers
+                # Include IFC reinforcement data when available
+                rebar = elem.get("reinforcement", {})
+                if rebar:
+                    entry["reinforcement"] = rebar
+                enriched.append(entry)
+
+            # Check for learned overrides from user corrections
+            override_hint = ""
+            if learning_svc:
+                try:
+                    overrides = await learning_svc.get_overrides_for_element(
+                        type_name, batch_elements[0].get("category"),
+                    )
+                    if overrides:
+                        override_lines = []
+                        for ov in overrides:
+                            override_lines.append(
+                                f"- {ov['field_name']}: use {ov['override_value']} "
+                                f"(calibrated from {ov['usage_count']} corrections)"
+                            )
+                        override_hint = (
+                            "\n\nUSER-CALIBRATED OVERRIDES (apply these instead of defaults):\n"
+                            + "\n".join(override_lines)
+                        )
+                        self.log(f"  Applying {len(overrides)} learned override(s) for {type_name}")
+                except Exception as e:
+                    self.log_warning(f"Failed to query learned overrides: {e}")
 
             user_message = build_mapper_message(enriched)
 
             try:
                 ai_result = await self.llm.ask_json(
-                    system_prompt=system_prompt,
+                    system_prompt=system_prompt + override_hint,
                     user_message=user_message,
                     temperature=0.0,
                     max_tokens=8192,
