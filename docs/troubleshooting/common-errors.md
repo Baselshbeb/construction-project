@@ -307,3 +307,61 @@ ValueError: Could not parse JSON from Claude after retries
 **Cause:** The AI validator flagged potential issues based on its engineering assessment. These are advisory warnings, not errors.
 
 **Solution:** Review each warning with your engineering judgment. The AI may be correct (you should add waterproofing) or it may be flagging something that is not applicable to your project. AI warnings never prevent BOQ generation.
+
+---
+
+## Debugging with Project Logs
+
+Each project creates a detailed log file that records every step of the pipeline processing. This is the most useful resource when diagnosing why a particular BOQ result looks incorrect.
+
+### Log Location
+
+Logs are stored on disk at:
+
+```
+logs/projects/{project_id}/pipeline.log
+```
+
+For example, if your project ID is `a1b2c3d4-e5f6-7890-abcd-ef1234567890`, the log file is at:
+
+```
+logs/projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/pipeline.log
+```
+
+### Accessing Logs via API
+
+You can download the log file through the API:
+
+```bash
+curl http://localhost:8000/api/projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/logs
+```
+
+This returns the full pipeline log as a text file.
+
+### What the Log Contains
+
+The pipeline log includes:
+
+- **Element parsing:** How many elements were extracted from the IFC file, which types were found, and any elements that were skipped
+- **Classification:** How elements were categorized into BOQ sections
+- **Quantity calculation:** Per-element quantity results, including which data source was used (Qto, geometry fallback, or basic dimensions)
+- **Material mapping:** Which materials were assigned to each element type
+- **Validation:** Results of all arithmetic checks and AI review
+- **Timing:** How long each pipeline stage took
+- **Warnings and errors:** Any issues encountered during processing
+
+### Using Logs for Troubleshooting
+
+If a BOQ quantity looks wrong:
+
+1. Find the project ID from the web interface or API
+2. Open the pipeline log (on disk or via API)
+3. Search for the element ID or type in question
+4. Check the quantity source -- was it from Qto, geometry, or basic dimensions?
+5. Look for any warnings related to that element
+
+If the pipeline failed:
+
+1. Check the log for the last successful stage
+2. Look for error messages immediately after
+3. Common causes include malformed IFC data, API timeouts, or missing element properties

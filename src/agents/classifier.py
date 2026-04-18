@@ -56,6 +56,8 @@ class ClassifierAgent(BaseAgent):
         state["status"] = ProcessingStatus.CLASSIFYING
         state["current_step"] = "Classifying elements"
 
+        plog = state.get("_project_logger")
+
         elements = state.get("parsed_elements", [])
         if not elements:
             self.log_warning("No elements to classify!")
@@ -85,6 +87,9 @@ class ClassifierAgent(BaseAgent):
                 state["warnings"].append(
                     f"AI classification failed for batch {batch_idx + 1}/{len(batches)}: {e}"
                 )
+                if plog:
+                    plog.log_ai_call("Classification", "claude-haiku-4-5",
+                                     batch_size=len(batch), success=False, error=str(e))
                 continue
 
             # Validate and normalize AI response through Pydantic model
@@ -98,6 +103,10 @@ class ClassifierAgent(BaseAgent):
                     if isinstance(v, str) and v in VALID_CATEGORIES:
                         normalized_result[str(k)] = v
 
+            if plog:
+                plog.log_ai_call("Classification", "claude-haiku-4-5",
+                                 batch_size=len(batch), success=True)
+
         classified: dict[str, list[int]] = {}
         unclassified = []
 
@@ -110,12 +119,19 @@ class ClassifierAgent(BaseAgent):
                 if category_str not in classified:
                     classified[category_str] = []
                 classified[category_str].append(element["ifc_id"])
+                if plog:
+                    plog.log_element("Classification", element["ifc_id"],
+                                     element.get("ifc_type", ""),
+                                     f"Classified as {category_str}")
             else:
                 unclassified.append(element)
                 self.log_warning(
                     f"AI did not classify: {element.get('ifc_type')} "
                     f"'{element.get('name')}' (got: {category_str})"
                 )
+                if plog:
+                    plog.log_element("Classification", element["ifc_id"],
+                                     element.get("ifc_type", ""), "UNCLASSIFIED")
 
         state["classified_elements"] = classified
 

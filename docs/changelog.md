@@ -6,9 +6,34 @@ This document summarizes the version history of the Metraj project. For the cano
 
 ## Version History (from Git)
 
+### v1.0.0 -- Geometry Fallback, Confidence Scoring, and Learning Loop
+
+**Latest release.** Adds geometry-based quantity fallback, per-item confidence scoring, user correction learning, and per-project logging.
+
+#### For Users
+- Geometry fallback: quantities now computed from 3D geometry when IFC property sets are missing
+- Per-wall opening deduction: door/window areas deducted from their specific walls, not storey average
+- Confidence scoring: every BOQ item rated HIGH/MEDIUM/LOW so you know what to review
+- Per-project logs: detailed step-by-step processing log for each uploaded file
+- Learning from corrections: edited BOQ items improve future pipeline runs
+- Engineering fixes: door frame perimeter corrected, stair formwork improved, waterproofing added
+- 17 element types now supported (was 9): ramps, coverings, curtain walls, railings, members, plates
+
+#### For Developers
+- New services: geometry_service.py, rebar_service.py, confidence_service.py, learning_service.py, project_logger.py
+- element_rules.json expanded from 6 to 20 entries with waterproofing, insulation, DPC
+- waste_factors.json expanded with 5 new categories
+- Confidence penalties calibrated: ratio-based rebar 2%, storey-avg openings 3%
+- Weighted average confidence instead of worst-case
+- Pipeline checkpointing with resume capability
+- API: BOQ editing endpoints, project logs endpoint
+- Per-project structured logging in logs/projects/{id}/pipeline.log
+
+---
+
 ### v0.5.0 -- AI Integration and Web Application
 
-**Latest release.** Integrates Claude AI into the core pipeline and adds a complete web application.
+Integrates Claude AI into the core pipeline and adds a complete web application.
 
 #### AI Integration
 - Integrated Claude AI into the Classifier, Material Mapper, and Validator agents

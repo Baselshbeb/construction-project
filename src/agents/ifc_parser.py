@@ -49,6 +49,8 @@ class IFCParserAgent(BaseAgent):
         state["status"] = ProcessingStatus.PARSING
         state["current_step"] = "Parsing IFC file"
 
+        plog = state.get("_project_logger")
+
         ifc_path = state["ifc_file_path"]
 
         # Step 1: Open the file
@@ -164,10 +166,17 @@ class IFCParserAgent(BaseAgent):
                     is_external=raw.get("is_external"),
                 )
                 parsed_elements.append(element)
+                if plog:
+                    plog.log_element("IFC Parsing", elem_id, raw["ifc_type"], "Parsed",
+                                     quantity_source=raw.get("quantity_source", "qto"),
+                                     quantities_count=len(clean_quantities),
+                                     materials_count=len(clean_materials))
             except Exception as e:
                 self.log_warning(
                     f"Skipping element {raw.get('ifc_id')}: {e}"
                 )
+                if plog:
+                    plog.log_error("IFC Parsing", str(e), element_id=raw.get("ifc_id"))
                 failed_elements.append({
                     "ifc_id": raw.get("ifc_id"),
                     "ifc_type": raw.get("ifc_type"),

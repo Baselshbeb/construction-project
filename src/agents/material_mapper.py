@@ -100,6 +100,8 @@ class MaterialMapperAgent(BaseAgent):
         state["status"] = ProcessingStatus.MAPPING_MATERIALS
         state["current_step"] = "Mapping materials"
 
+        plog = state.get("_project_logger")
+
         language = state.get("language", "en")
         elements = state.get("parsed_elements", [])
         calc_quantities = state.get("calculated_quantities", [])
@@ -201,7 +203,15 @@ class MaterialMapperAgent(BaseAgent):
                 state["warnings"].append(
                     f"AI material mapping failed for {type_name}: {e}"
                 )
+                if plog:
+                    plog.log_ai_call("Material Mapping", "claude-sonnet",
+                                     batch_size=len(batch_elements), success=False,
+                                     error=str(e))
                 continue
+
+            if plog:
+                plog.log_ai_call("Material Mapping", "claude-sonnet",
+                                 batch_size=len(batch_elements), success=True)
 
             # Validate and process AI response through Pydantic model
             try:
@@ -215,6 +225,10 @@ class MaterialMapperAgent(BaseAgent):
                     elem_result.model_dump(), qty_lookup, elements
                 )
                 all_materials.extend(materials)
+                elem_id = elem_result.model_dump().get("element_id")
+                if plog and elem_id is not None:
+                    plog.log_element("Material Mapping", elem_id, type_name,
+                                     f"Mapped {len(materials)} materials")
 
         # Aggregate same materials across all elements
         aggregated = self._aggregate_materials(all_materials)

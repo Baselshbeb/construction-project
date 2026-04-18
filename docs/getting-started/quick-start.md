@@ -29,7 +29,7 @@ Verify the server is running by visiting `http://localhost:8000/api/health` in y
 {
   "status": "ok",
   "service": "Metraj AI",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "checks": {
     "api": "ok",
     "uploads_writable": "ok",

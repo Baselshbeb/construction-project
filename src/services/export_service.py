@@ -381,7 +381,7 @@ class ExportService:
         row = 1
 
         # Title
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
         cell = ws.cell(
             row=row, column=1,
             value=labels.get("audit_title", "QUANTITY AUDIT TRAIL"),
@@ -391,6 +391,8 @@ class ExportService:
         row += 2
 
         # Headers
+        ws.column_dimensions["H"].width = 30
+        ws.column_dimensions["I"].width = 35
         headers = [
             labels["item_no"],
             labels["description"],
@@ -399,6 +401,8 @@ class ExportService:
             labels.get("waste_pct", "Waste %"),
             labels.get("total_qty_with_waste", "Total Qty (incl. waste)"),
             labels.get("source_elements_count", "Source Elements"),
+            "Confidence",
+            "IFC Element IDs",
         ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=row, column=col, value=header)
@@ -411,14 +415,14 @@ class ExportService:
         # Data rows
         for section in boq_data.get("sections", []):
             # Section header
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=9)
             cell = ws.cell(
                 row=row, column=1,
                 value=f"{section['section_no']}. {section['title']}",
             )
             cell.font = SECTION_FONT
             cell.fill = SECTION_FILL
-            for col in range(1, 8):
+            for col in range(1, 10):
                 ws.cell(row=row, column=col).fill = SECTION_FILL
                 ws.cell(row=row, column=col).border = THIN_BORDER
             row += 1
@@ -450,6 +454,24 @@ class ExportService:
                 count_cell = ws.cell(row=row, column=7, value=elem_count)
                 count_cell.border = THIN_BORDER
                 count_cell.alignment = Alignment(horizontal="center")
+
+                # Confidence level with color coding
+                conf = item.get("confidence", {})
+                conf_level = conf.get("level", "medium") if conf else "medium"
+                conf_cell = ws.cell(row=row, column=8, value=conf_level.upper())
+                conf_cell.border = THIN_BORDER
+                conf_cell.font = CONFIDENCE_FONTS.get(conf_level, ITEM_FONT)
+                conf_cell.fill = CONFIDENCE_FILLS.get(conf_level, PatternFill())
+                conf_cell.alignment = Alignment(horizontal="center")
+
+                # Source element IDs (truncated to fit cell)
+                source_ids = item.get("source_elements", [])
+                ids_str = ", ".join(str(eid) for eid in source_ids[:20])
+                if len(source_ids) > 20:
+                    ids_str += f" ... (+{len(source_ids) - 20} more)"
+                ids_cell = ws.cell(row=row, column=9, value=ids_str)
+                ids_cell.border = THIN_BORDER
+                ids_cell.font = Font(name="Calibri", size=8, color="888888")
 
                 for col in range(1, 8):
                     ws.cell(row=row, column=col).font = ITEM_FONT

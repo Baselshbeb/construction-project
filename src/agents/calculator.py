@@ -144,6 +144,8 @@ class CalculatorAgent(BaseAgent):
                     f"({opening_area:.1f} m2 openings / {wall_area:.1f} m2 walls)"
                 )
 
+        plog = state.get("_project_logger")
+
         calculated = []
         for element in elements:
             quantities = self._calculate_for_element(element)
@@ -155,6 +157,20 @@ class CalculatorAgent(BaseAgent):
                 "category": element.get("category"),
                 "quantities": quantities,
             })
+            if plog:
+                ifc_type = element.get("ifc_type", "")
+                extra: dict[str, Any] = {}
+                if ifc_type in ("IfcWall", "IfcWallStandardCase"):
+                    storey = element.get("storey") or "_unknown"
+                    per_wall_openings = element.get("openings", [])
+                    if per_wall_openings:
+                        extra["opening_method"] = "per_wall"
+                    elif self._opening_ratio_by_storey.get(storey, 0) > 0:
+                        extra["opening_method"] = "storey_avg"
+                    else:
+                        extra["opening_method"] = "qto"
+                plog.log_element("Calculation", element["ifc_id"], ifc_type,
+                                 f"Computed {len(quantities)} quantities", **extra)
 
         state["calculated_quantities"] = calculated
 

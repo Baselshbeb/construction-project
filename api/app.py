@@ -307,7 +307,7 @@ async def health():
     return {
         "status": "ok" if all_ok else "degraded",
         "service": "Metraj AI",
-        "version": "0.5.0",
+        "version": "1.0.0",
         "checks": checks,
     }
 

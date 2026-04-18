@@ -71,17 +71,24 @@ class LLMService:
         # Use structured system message with cache_control for prompt caching.
         # Repeated calls with the same system prompt (e.g. material mapper
         # batches) get a ~90% discount on cached input tokens.
-        response = await self.client.messages.create(
-            model=model or self.default_model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=[{
-                "type": "text",
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            messages=[{"role": "user", "content": user_message}],
-        )
+        import asyncio
+        try:
+            response = await asyncio.wait_for(
+                self.client.messages.create(
+                    model=model or self.default_model,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    system=[{
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }],
+                    messages=[{"role": "user", "content": user_message}],
+                ),
+                timeout=120.0,  # 2-minute timeout per API call
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError("LLM API call timed out after 120 seconds")
 
         text = response.content[0].text
         usage = response.usage

@@ -2,7 +2,7 @@
 
 The Metraj API is built with FastAPI and runs on Uvicorn. The base URL for local development is `http://localhost:8000`.
 
-API version: 0.5.0
+API version: 1.0.0
 
 ---
 
@@ -22,7 +22,7 @@ Verifies that the API server and its dependencies are operational.
 {
   "status": "ok",
   "service": "Metraj AI",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "checks": {
     "api": "ok",
     "uploads_writable": "ok",
@@ -300,6 +300,190 @@ Returns the file as a download with appropriate Content-Type header.
 ```bash
 curl -o building_BOQ.xlsx \
   http://localhost:8000/api/projects/a1b2c3d4/download/xlsx
+```
+
+---
+
+### Get BOQ Data
+
+```
+GET /api/projects/{project_id}/boq
+```
+
+Returns the full BOQ data for a completed project, suitable for display in an editable table.
+
+**Parameters:**
+
+| Parameter | Type | Location | Required | Description |
+|---|---|---|---|---|
+| `project_id` | String (UUID) | Path | Yes | The project ID |
+
+**Response (200 OK):**
+
+```json
+{
+  "project_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "sections": [
+    {
+      "name": "Substructure",
+      "items": [
+        {
+          "item_no": "1.1",
+          "description": "Concrete C25/30 for foundations",
+          "unit": "m3",
+          "quantity": 45.2,
+          "waste_factor": 1.05,
+          "confidence": {"level": "high", "score": 0.92}
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Error Responses:**
+
+| Code | Condition | Message |
+|---|---|---|
+| 400 | Not completed | "Project not yet completed" |
+| 404 | Project not found | "Project not found" |
+
+**curl example:**
+
+```bash
+curl http://localhost:8000/api/projects/a1b2c3d4/boq
+```
+
+---
+
+### Update BOQ Line Item
+
+```
+PATCH /api/projects/{project_id}/boq/items/{item_no}
+```
+
+Update a single BOQ line item. The correction is recorded in the learning system and used to improve future pipeline runs.
+
+**Parameters:**
+
+| Parameter | Type | Location | Required | Description |
+|---|---|---|---|---|
+| `project_id` | String (UUID) | Path | Yes | The project ID |
+| `item_no` | String | Path | Yes | The BOQ item number (e.g., "1.1") |
+
+**Request Body (JSON):**
+
+```json
+{
+  "field_name": "quantity",
+  "old_value": "45.2",
+  "new_value": "48.0",
+  "element_type": "IfcWall",
+  "category": "Concrete"
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `field_name` | String | Yes | Field being corrected: `quantity`, `description`, `unit`, or `waste_factor` |
+| `old_value` | String | Yes | The original value before the edit |
+| `new_value` | String | Yes | The corrected value |
+| `element_type` | String | No | IFC element type (e.g., "IfcWall") |
+| `category` | String | No | Material/element category |
+
+**Response (200 OK):**
+
+```json
+{
+  "status": "ok",
+  "message": "Correction recorded",
+  "item_no": "1.1"
+}
+```
+
+**Error Responses:**
+
+| Code | Condition | Message |
+|---|---|---|
+| 404 | Project not found | "Project not found" |
+| 404 | Item not found | "Item not found" |
+
+**curl example:**
+
+```bash
+curl -X PATCH http://localhost:8000/api/projects/a1b2c3d4/boq/items/1.1 \
+  -H "Content-Type: application/json" \
+  -d '{"field_name": "quantity", "old_value": "45.2", "new_value": "48.0", "element_type": "IfcWall", "category": "Concrete"}'
+```
+
+---
+
+### Approve BOQ
+
+```
+POST /api/projects/{project_id}/boq/approve
+```
+
+Approve the BOQ for a project. This boosts the confidence of all learned overrides derived from corrections made to this project's BOQ items.
+
+**Parameters:**
+
+| Parameter | Type | Location | Required | Description |
+|---|---|---|---|---|
+| `project_id` | String (UUID) | Path | Yes | The project ID |
+
+**Response (200 OK):**
+
+```json
+{
+  "status": "ok",
+  "message": "BOQ approved. Learned overrides boosted."
+}
+```
+
+**Error Responses:**
+
+| Code | Condition | Message |
+|---|---|---|
+| 404 | Project not found | "Project not found" |
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8000/api/projects/a1b2c3d4/boq/approve
+```
+
+---
+
+### Download Project Logs
+
+```
+GET /api/projects/{project_id}/logs
+```
+
+Download the per-project pipeline log file. Each project creates a detailed log at `logs/projects/{project_id}/pipeline.log` with step-by-step processing details.
+
+**Parameters:**
+
+| Parameter | Type | Location | Required | Description |
+|---|---|---|---|---|
+| `project_id` | String (UUID) | Path | Yes | The project ID |
+
+**Response (200 OK):**
+
+Returns the log file as plain text with `Content-Type: text/plain`.
+
+**Error Responses:**
+
+| Code | Condition | Message |
+|---|---|---|
+| 404 | Project not found | "Project not found" |
+| 404 | Log file missing | "Log file not found" |
+
+**curl example:**
+
+```bash
+curl http://localhost:8000/api/projects/a1b2c3d4/logs
 ```
 
 ---

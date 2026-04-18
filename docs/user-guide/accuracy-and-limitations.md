@@ -160,3 +160,36 @@ Users should be aware that:
 - The system does not account for local building codes, regulations, or site conditions.
 
 All estimates should be reviewed and verified by a qualified quantity surveyor or construction professional before being used for procurement, tendering, or construction planning.
+
+---
+
+## Confidence Scores
+
+Every line item in the BOQ includes a confidence score that tells you how reliable the underlying data is. This score is fully deterministic (not AI-generated) and reflects the quality of the input data used to compute each quantity.
+
+### What the Levels Mean
+
+| Level | Score Range | Meaning |
+|---|---|---|
+| **HIGH** | 85% or above | Quantities come from reliable sources: IFC Quantity Sets (Qto), exact opening deductions, and/or detailed reinforcement data from the model. These items are likely accurate. |
+| **MEDIUM** | 65% to 84% | Some approximations were used. Common causes: quantities derived from 3D geometry fallback instead of Qto, storey-average opening deduction instead of per-wall, or reinforcement estimated from industry ratios. Worth a quick review. |
+| **LOW** | Below 65% | Significant data gaps. Quantities may be missing from the IFC file entirely, materials were guessed by the AI without model hints, or generic calculation rules were used instead of element-specific ones. These items should be carefully verified. |
+
+### How to Read Confidence Scores in the BOQ
+
+In the Excel report, each BOQ line item includes confidence information:
+- The **confidence level** (HIGH/MEDIUM/LOW) indicates overall reliability
+- The **factors** list explains exactly why the item received its score (e.g., "Quantities from geometry fallback (-10%)", "Reinforcement from ratio estimates")
+- Items with `review_needed: true` (MEDIUM and LOW) should be prioritized for manual verification
+
+### Why Some Items Are Flagged for Review
+
+Items are flagged when the system had to rely on approximations or fallbacks. Common reasons include:
+
+- **Missing Qto data:** The IFC file did not include pre-computed quantities, so Metraj derived them from 3D geometry or basic dimensions
+- **Storey-average openings:** Door and window areas were deducted using a storey average rather than per-wall measurements
+- **Ratio-based reinforcement:** Steel quantities were estimated using industry kg/m3 ratios rather than actual rebar data from the model
+- **AI-guessed materials:** The material mapping relied on AI inference without material hints from the IFC file
+- **Generic calculations:** The element type did not have dedicated calculation rules, so generic formulas were used
+
+Flagged items are not necessarily wrong -- they simply have more uncertainty. Focus your review effort on LOW-confidence items first, then MEDIUM, and spot-check HIGH items as time allows

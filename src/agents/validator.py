@@ -47,6 +47,8 @@ class ValidatorAgent(BaseAgent):
         state["status"] = ProcessingStatus.VALIDATING
         state["current_step"] = "Validating results"
 
+        plog = state.get("_project_logger")
+
         warnings = list(state.get("warnings", []))
         errors = list(state.get("errors", []))
 
@@ -168,6 +170,30 @@ class ValidatorAgent(BaseAgent):
         else:
             checks["steel_ratio_reasonable"] = True
 
+        # --- Log all validation checks ---
+        if plog:
+            plog.log_validation("elements_parsed", checks["elements_parsed"],
+                                value=len(elements))
+            plog.log_validation("elements_classified", checks["elements_classified"],
+                                value=len(elements) - len(unclassified))
+            plog.log_validation("quantities_calculated", checks["quantities_calculated"],
+                                value=len(calc_quantities))
+            plog.log_validation("materials_mapped", checks["materials_mapped"],
+                                value=len(materials))
+            plog.log_validation("no_negative_quantities", checks["no_negative_quantities"])
+            plog.log_validation("concrete_ratio_reasonable",
+                                checks["concrete_ratio_reasonable"],
+                                value=round(total_concrete / total_floor_area, 2)
+                                if total_floor_area > 0 and total_concrete > 0 else None,
+                                threshold="0.1-1.5 m3/m2")
+            plog.log_validation("all_storeys_have_elements",
+                                checks["all_storeys_have_elements"])
+            plog.log_validation("steel_ratio_reasonable",
+                                checks["steel_ratio_reasonable"],
+                                value=round(total_steel / total_concrete, 0)
+                                if total_concrete > 0 and total_steel > 0 else None,
+                                threshold="50-200 kg/m3")
+
         # --- AI-powered intelligent validation ---
         # AI issues are advisory - they should NEVER block the pipeline.
         # Even AI "errors" are downgraded to warnings because only the
@@ -230,6 +256,7 @@ class ValidatorAgent(BaseAgent):
 
         Returns the AI's assessment as a validated dict, or None if the call fails.
         """
+        plog = state.get("_project_logger")
         try:
             language = state.get("language", "en")
             user_message = build_validator_message(
@@ -250,6 +277,9 @@ class ValidatorAgent(BaseAgent):
             validated = ValidatorResponse.from_raw(raw_result)
             result = validated.model_dump()
 
+            if plog:
+                plog.log_ai_call("Validation", "claude-sonnet", success=True)
+
             self.log(f"  AI assessment: {result.get('overall_assessment', 'N/A')}")
             if result.get("summary"):
                 self.log(f"  AI summary: {result['summary']}")
@@ -258,4 +288,7 @@ class ValidatorAgent(BaseAgent):
 
         except Exception as e:
             self.log_warning(f"AI validation failed (non-critical): {e}")
+            if plog:
+                plog.log_ai_call("Validation", "claude-sonnet", success=False,
+                                 error=str(e))
             return None

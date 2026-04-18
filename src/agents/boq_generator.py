@@ -54,6 +54,8 @@ class BOQGeneratorAgent(BaseAgent):
         state["status"] = ProcessingStatus.GENERATING_BOQ
         state["current_step"] = "Generating BOQ"
 
+        plog = state.get("_project_logger")
+
         language = state.get("language", "en")
         section_titles = get_boq_sections(language)
 
@@ -166,6 +168,10 @@ class BOQGeneratorAgent(BaseAgent):
                 item_confidence = confidence_svc.score_boq_item(item, element_scores)
                 item["confidence"] = item_confidence.model_dump()
                 all_item_scores.append(item_confidence)
+                if plog:
+                    plog.log_element("BOQ Generation", 0, item["category"],
+                                     f"Item {item['item_no']}: {item['description']}"
+                                     f" - confidence {item_confidence.level.value}")
 
         confidence_summary = confidence_svc.generate_summary(all_item_scores)
         self.log(

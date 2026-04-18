@@ -345,8 +345,12 @@ export default function Home() {
               onDragLeave={() => setDragActive(false)}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
+              role="button"
+              aria-label={t("upload.selectFile")}
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileInputRef.current?.click(); }}
             >
-              <div className="text-6xl mb-4">
+              <div className="text-6xl mb-4" aria-hidden="true">
                 {dragActive ? "+" : ""}
               </div>
               <p className="text-lg font-medium text-foreground mb-1">
@@ -405,7 +409,14 @@ export default function Home() {
                   {progress.current}/{progress.total}
                 </span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+              <div
+                className="w-full bg-gray-200 rounded-full h-3 overflow-hidden"
+                role="progressbar"
+                aria-valuenow={progress.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label={`Processing: ${progress.step} - ${progress.percent}%`}
+              >
                 <div
                   className="h-full rounded-full transition-all duration-500 ease-out"
                   style={{
@@ -458,8 +469,8 @@ export default function Home() {
                       {step}
                     </span>
                     {isCurrent && (
-                      <div className="ms-auto">
-                        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      <div className="ms-auto" role="status" aria-label="Processing">
+                        <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" aria-hidden="true" />
                       </div>
                     )}
                   </div>
