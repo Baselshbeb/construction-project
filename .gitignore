@@ -48,3 +48,6 @@ site/
 
 # Database
 data/*.db
+
+# Real-world test IFC files (large, download with scripts/download_real_world_ifc.py)
+tests/fixtures/real_world/
