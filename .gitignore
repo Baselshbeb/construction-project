@@ -42,3 +42,9 @@ output/
 # Logs
 logs/
 *.log
+
+# MkDocs generated site
+site/
+
+# Database
+data/*.db

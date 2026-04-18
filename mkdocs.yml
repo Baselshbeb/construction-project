@@ -1,0 +1,121 @@
+site_name: Metraj Documentation
+site_description: AI-Powered Construction Material Estimation System
+site_url: https://docs.metraj.com
+repo_url: https://github.com/Baselshbeb/construction-project
+repo_name: Baselshbeb/construction-project
+
+theme:
+  name: material
+  language: en
+  palette:
+    # Light mode (default)
+    - scheme: default
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+  font:
+    text: Inter
+    code: JetBrains Mono
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick-start.md
+    - Configuration: getting-started/configuration.md
+  - Architecture:
+    - System Overview: architecture/overview.md
+    - Agent Pipeline: architecture/agent-pipeline.md
+    - AI Transparency: architecture/ai-transparency.md
+  - User Guide:
+    - Uploading IFC Files: user-guide/uploading-ifc.md
+    - Understanding the BOQ: user-guide/understanding-boq.md
+    - Accuracy & Limitations: user-guide/accuracy-and-limitations.md
+    - "Turkce (TR)":
+      - IFC Dosyasi Yukleme: user-guide/tr/uploading-ifc.md
+      - BOQ Raporu Anlama: user-guide/tr/understanding-boq.md
+      - Dogruluk ve Sinirlamalar: user-guide/tr/accuracy-and-limitations.md
+    - "العربية (AR)":
+      - تحميل ملف IFC: user-guide/ar/uploading-ifc.md
+      - فهم جدول الكميات: user-guide/ar/understanding-boq.md
+      - الدقة والقيود: user-guide/ar/accuracy-and-limitations.md
+  - Reference:
+    - API Endpoints: reference/api-endpoints.md
+    - Waste Factors: reference/waste-factors.md
+    - Element Rules: reference/element-rules.md
+    - IFC Compatibility: reference/ifc-compatibility.md
+    - Glossary: reference/glossary.md
+  - Deployment:
+    - Local Development: deployment/local-development.md
+    - Docker: deployment/docker.md
+    - Production: deployment/production.md
+  - Troubleshooting:
+    - Common Errors: troubleshooting/common-errors.md
+    - FAQ: troubleshooting/faq.md
+  - Legal:
+    - Data Handling: legal/data-handling.md
+    - Accuracy Disclaimer: legal/accuracy-disclaimer.md
+  - Changelog: changelog.md
+
+plugins:
+  - search:
+      lang: en
+  - tags
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.critic
+  - pymdownx.keys
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Baselshbeb/construction-project
+  generator: false
+
+copyright: Copyright &copy; 2026 Metraj AI
