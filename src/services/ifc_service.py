@@ -223,13 +223,41 @@ class IFCService:
     # Full element extraction (combines all the above)
     # ------------------------------------------------------------------
 
-    def extract_element_data(self, element) -> dict[str, Any]:
+    def extract_element_data(
+        self, element, geometry_service=None,
+    ) -> dict[str, Any]:
         """Extract all relevant data from a single building element.
 
         This is the main method the IFC Parser Agent uses.
-        Combines quantities, properties, materials, and location.
+        Combines quantities, properties, materials, location, and optionally
+        geometry-derived quantities as a fallback.
+
+        Args:
+            element: The IFC element to extract data from.
+            geometry_service: Optional GeometryService for 3D geometry fallback
+                when Qto data is missing.
         """
         ifc_type = element.is_a()
+
+        qto_quantities = self.get_element_quantities(element)
+
+        # Track data source for confidence scoring
+        quantity_source = "qto" if qto_quantities else "none"
+
+        # Geometry fallback: fill missing quantities from 3D geometry
+        if geometry_service:
+            has_critical = any(
+                qto_quantities.get(k, 0) > 0
+                for k in ("GrossVolume", "NetVolume", "GrossArea", "NetArea",
+                          "Area", "Length", "Height")
+            )
+            if not has_critical:
+                geo_quantities = geometry_service.compute_element_geometry(element)
+                if geo_quantities:
+                    # Merge geometry values into quantities (Qto takes priority)
+                    for key, val in geo_quantities.items():
+                        qto_quantities.setdefault(key, val)
+                    quantity_source = "geometry" if not has_critical else "mixed"
 
         data = {
             "ifc_id": element.id(),
@@ -237,7 +265,8 @@ class IFCService:
             "name": element.Name,
             "storey": self.get_element_container(element),
             "type_name": self.get_element_type_name(element),
-            "quantities": self.get_element_quantities(element),
+            "quantities": qto_quantities,
+            "quantity_source": quantity_source,
             "properties": self.get_element_properties(element),
             "materials": self.get_element_material(element),
         }
@@ -252,7 +281,97 @@ class IFCService:
             if hasattr(element, "OverallHeight") and element.OverallHeight:
                 data["quantities"].setdefault("Height", element.OverallHeight)
 
+        # Extract per-wall openings (for Phase 2 per-wall deduction)
+        if ifc_type in ("IfcWall", "IfcWallStandardCase"):
+            data["openings"] = self.get_wall_openings(element)
+
+        # Extract material layers with thicknesses (for Phase 2)
+        data["material_layers"] = self.get_material_layers(element)
+
         return data
+
+    def get_wall_openings(self, wall_element) -> list[dict[str, Any]]:
+        """Get all openings (doors/windows) in a wall via IfcRelVoidsElement.
+
+        Returns a list of opening dicts with area, width, height, and the
+        type of filling (door/window) if present.
+        """
+        openings: list[dict[str, Any]] = []
+
+        if not hasattr(wall_element, "HasOpenings"):
+            return openings
+
+        for rel_void in wall_element.HasOpenings:
+            opening_elem = rel_void.RelatedOpeningElement
+            if not opening_elem:
+                continue
+
+            opening_data: dict[str, Any] = {
+                "opening_id": opening_elem.id(),
+                "width": 0,
+                "height": 0,
+                "area": 0,
+                "filling_type": None,
+            }
+
+            # Get opening dimensions from Qto
+            oqto = self.get_element_quantities(opening_elem)
+            opening_data["width"] = oqto.get("Width", 0)
+            opening_data["height"] = oqto.get("Height", 0)
+            opening_data["area"] = oqto.get("Area", 0)
+
+            if not opening_data["area"] and opening_data["width"] and opening_data["height"]:
+                opening_data["area"] = opening_data["width"] * opening_data["height"]
+
+            # Check what fills the opening (door or window)
+            if hasattr(opening_elem, "HasFillings"):
+                for fill_rel in opening_elem.HasFillings:
+                    filling = fill_rel.RelatedBuildingElement
+                    if filling:
+                        opening_data["filling_type"] = filling.is_a()
+                        # Use filling dimensions if opening dimensions are missing
+                        if not opening_data["area"]:
+                            fqto = self.get_element_quantities(filling)
+                            w = fqto.get("Width", 0)
+                            h = fqto.get("Height", 0)
+                            if w and h:
+                                opening_data["width"] = w
+                                opening_data["height"] = h
+                                opening_data["area"] = w * h
+
+            if opening_data["area"] > 0:
+                openings.append(opening_data)
+
+        return openings
+
+    def get_material_layers(self, element) -> list[dict[str, Any]]:
+        """Get material layers with thicknesses for composite elements.
+
+        Returns a list of layer dicts with name, thickness (in metres),
+        and whether the layer is ventilated (cavity).
+        """
+        layers: list[dict[str, Any]] = []
+
+        material = ifcopenshell.util.element.get_material(element)
+        if material is None:
+            return layers
+
+        layer_set = None
+        if material.is_a("IfcMaterialLayerSetUsage"):
+            layer_set = material.ForLayerSet
+        elif material.is_a("IfcMaterialLayerSet"):
+            layer_set = material
+
+        if layer_set and hasattr(layer_set, "MaterialLayers"):
+            for layer in layer_set.MaterialLayers:
+                layer_data: dict[str, Any] = {
+                    "name": layer.Material.Name if layer.Material else "Unknown",
+                    "thickness_m": (layer.LayerThickness or 0) / 1000.0,
+                    "is_ventilated": getattr(layer, "IsVentilated", False) or False,
+                }
+                layers.append(layer_data)
+
+        return layers
 
     def discover_element_types(self) -> dict[str, int]:
         """Find ALL element types in the IFC file, including unrecognized ones.
@@ -274,11 +393,15 @@ class IFCService:
         known = set(BUILDING_ELEMENT_TYPES)
         return {t: c for t, c in all_types.items() if t not in known}
 
-    def extract_all_elements(self) -> list[dict[str, Any]]:
+    def extract_all_elements(self, geometry_service=None) -> tuple:
         """Extract data from ALL building elements.
 
-        Returns a list of element data dictionaries, ready to be
-        converted into ParsedElement models.
+        Args:
+            geometry_service: Optional GeometryService for 3D geometry
+                fallback when Qto data is missing.
+
+        Returns:
+            Tuple of (extracted_elements, unknown_types).
         """
         elements = self.get_all_building_elements()
         logger.info(f"Extracting data from {len(elements)} building elements")
@@ -293,15 +416,26 @@ class IFCService:
             )
 
         extracted = []
+        qto_count = 0
+        geo_count = 0
         for element in elements:
             try:
-                data = self.extract_element_data(element)
+                data = self.extract_element_data(element, geometry_service)
                 extracted.append(data)
+                # Track quantity sources
+                src = data.get("quantity_source", "none")
+                if src == "qto":
+                    qto_count += 1
+                elif src in ("geometry", "mixed"):
+                    geo_count += 1
             except Exception as e:
                 logger.warning(
                     f"Failed to extract element {element.id()} "
                     f"({element.is_a()}): {e}"
                 )
 
-        logger.info(f"Successfully extracted {len(extracted)} elements")
+        logger.info(
+            f"Successfully extracted {len(extracted)} elements "
+            f"(Qto: {qto_count}, geometry fallback: {geo_count})"
+        )
         return extracted, unknown

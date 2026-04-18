@@ -185,6 +185,18 @@ class CalculatorAgent(BaseAgent):
             return self._calc_roof(element, qto, props)
         elif ifc_type in ("IfcFooting", "IfcPile"):
             return self._calc_foundation(element, qto, props)
+        elif ifc_type in ("IfcRamp", "IfcRampFlight"):
+            return self._calc_ramp(element, qto, props)
+        elif ifc_type == "IfcCovering":
+            return self._calc_covering(element, qto, props)
+        elif ifc_type == "IfcCurtainWall":
+            return self._calc_curtain_wall(element, qto, props)
+        elif ifc_type == "IfcRailing":
+            return self._calc_railing(element, qto, props)
+        elif ifc_type == "IfcMember":
+            return self._calc_member(element, qto, props)
+        elif ifc_type == "IfcPlate":
+            return self._calc_plate(element, qto, props)
         else:
             return self._calc_generic(element, qto, props)
 
@@ -212,12 +224,24 @@ class CalculatorAgent(BaseAgent):
         if not gross_area and length and height:
             gross_area = length * height
 
-        # Net area — use IFC value if present, otherwise deduct actual
-        # opening ratio for this storey (falls back to 10% if no data).
+        # Net area — priority order:
+        # 1. IFC NetArea from Qto (most reliable)
+        # 2. Per-wall opening deduction via IfcRelVoidsElement (exact)
+        # 3. Storey-level average opening ratio (approximate fallback)
         net_area = _resolve_qty(qto, "NetArea")
+        opening_method = "qto"
         if not net_area and gross_area:
-            opening_ratio = self._opening_ratio_by_storey.get(storey, 0.10)
-            net_area = gross_area * (1.0 - opening_ratio)
+            per_wall_openings = elem.get("openings", [])
+            if per_wall_openings:
+                # Use exact per-wall opening area from IFC relationships
+                total_opening_area = sum(o.get("area", 0) for o in per_wall_openings)
+                net_area = max(gross_area - total_opening_area, 0)
+                opening_method = "per_wall"
+            else:
+                # Fall back to storey-level average
+                opening_ratio = self._opening_ratio_by_storey.get(storey, 0.10)
+                net_area = gross_area * (1.0 - opening_ratio)
+                opening_method = "storey_avg"
 
         # Volume
         gross_volume = _resolve_qty(qto, "GrossVolume")
@@ -225,9 +249,9 @@ class CalculatorAgent(BaseAgent):
             gross_volume = gross_area * width
 
         net_volume = _resolve_qty(qto, "NetVolume")
-        if not net_volume and gross_volume:
-            opening_ratio = self._opening_ratio_by_storey.get(storey, 0.10)
-            net_volume = gross_volume * (1.0 - opening_ratio)
+        if not net_volume and gross_volume and gross_area:
+            # Apply same opening ratio to volume
+            net_volume = gross_volume * (net_area / gross_area) if gross_area > 0 else gross_volume
 
         # Full precision — rounding deferred to export
         quantities.append({
@@ -410,8 +434,168 @@ class CalculatorAgent(BaseAgent):
     def _calc_roof(
         self, elem: dict, qto: dict, props: dict
     ) -> list[dict[str, Any]]:
-        """Calculate roof quantities."""
-        return self._calc_slab(elem, qto, props)
+        """Calculate roof quantities with slope compensation."""
+        import math
+        quantities = []
+
+        # Base slab-like quantities
+        length = _resolve_qty(qto, "Length")
+        width_val = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+        depth = _normalize_unit(_resolve_qty(qto, "Depth"), "Depth")
+
+        footprint_area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
+        if not footprint_area and length and width_val:
+            footprint_area = length * width_val
+
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        if not volume and footprint_area and depth:
+            volume = footprint_area * depth
+
+        # Detect slope — check property or estimate from bounding box height
+        slope_angle = props.get("PitchAngle", 0) or props.get("Slope", 0)
+        if not slope_angle:
+            # Estimate from bounding box if available
+            bbox_height = qto.get("Height", 0) or _resolve_qty(qto, "Height")
+            if bbox_height and footprint_area and bbox_height > 0.5:
+                # Rough: if roof has significant height, estimate slope
+                est_span = math.sqrt(footprint_area) if footprint_area else 0
+                if est_span > 0:
+                    slope_angle = math.degrees(math.atan(bbox_height / (est_span / 2)))
+
+        # Sloped surface area = footprint / cos(angle)
+        slope_factor = 1.0
+        if slope_angle and slope_angle > 5:
+            slope_factor = 1.0 / math.cos(math.radians(min(slope_angle, 60)))
+
+        sloped_area = footprint_area * slope_factor
+
+        quantities.append({"description": "Roof footprint area", "quantity": footprint_area, "unit": "m2"})
+        quantities.append({"description": "Roof sloped surface area", "quantity": sloped_area, "unit": "m2"})
+        if volume:
+            quantities.append({"description": "Roof volume", "quantity": volume, "unit": "m3"})
+
+        perimeter = _resolve_qty(qto, "Perimeter")
+        if not perimeter and length and width_val:
+            perimeter = 2 * (length + width_val)
+        if perimeter:
+            quantities.append({"description": "Roof perimeter (eave length)", "quantity": perimeter, "unit": "m"})
+
+        return quantities
+
+    def _calc_ramp(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate ramp quantities."""
+        quantities = []
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
+        length = _resolve_qty(qto, "Length")
+
+        if volume:
+            quantities.append({"description": "Ramp volume", "quantity": volume, "unit": "m3"})
+        if area:
+            quantities.append({"description": "Ramp area", "quantity": area, "unit": "m2"})
+        if length:
+            quantities.append({"description": "Ramp length", "quantity": length, "unit": "m"})
+        quantities.append({"description": "Ramp count", "quantity": 1, "unit": "nr"})
+        return quantities
+
+    def _calc_covering(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate covering quantities (floors, ceilings, cladding)."""
+        quantities = []
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
+        if not area:
+            length = _resolve_qty(qto, "Length")
+            width = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+            if length and width:
+                area = length * width
+
+        if area:
+            quantities.append({"description": "Covering area", "quantity": area, "unit": "m2"})
+
+        perimeter = _resolve_qty(qto, "Perimeter")
+        if perimeter:
+            quantities.append({"description": "Covering perimeter", "quantity": perimeter, "unit": "m"})
+
+        quantities.append({"description": "Covering count", "quantity": 1, "unit": "nr"})
+        return quantities
+
+    def _calc_curtain_wall(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate curtain wall quantities."""
+        quantities = []
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
+        length = _resolve_qty(qto, "Length")
+        height = _normalize_unit(_resolve_qty(qto, "Height"), "Height")
+
+        if not area and length and height:
+            area = length * height
+
+        if area:
+            quantities.append({"description": "Curtain wall area", "quantity": area, "unit": "m2"})
+        if length:
+            quantities.append({"description": "Curtain wall length", "quantity": length, "unit": "m"})
+        quantities.append({"description": "Curtain wall count", "quantity": 1, "unit": "nr"})
+        return quantities
+
+    def _calc_railing(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate railing quantities."""
+        quantities = []
+        length = _resolve_qty(qto, "Length")
+
+        if length:
+            quantities.append({"description": "Railing length", "quantity": length, "unit": "m"})
+        quantities.append({"description": "Railing count", "quantity": 1, "unit": "nr"})
+        return quantities
+
+    def _calc_member(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate structural member quantities (steel members, bracing, etc.)."""
+        quantities = []
+        length = _resolve_qty(qto, "Length")
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        cross_section = _resolve_qty(qto, "CrossSectionArea")
+
+        if not volume and cross_section and length:
+            volume = cross_section * length
+
+        if volume:
+            quantities.append({"description": "Member volume", "quantity": volume, "unit": "m3"})
+        if length:
+            quantities.append({"description": "Member length", "quantity": length, "unit": "m"})
+
+        outer_surface = _resolve_qty(qto, "OuterSurfaceArea")
+        if outer_surface:
+            quantities.append({"description": "Member surface area", "quantity": outer_surface, "unit": "m2"})
+
+        quantities.append({"description": "Member count", "quantity": 1, "unit": "nr"})
+        return quantities
+
+    def _calc_plate(
+        self, elem: dict, qto: dict, props: dict
+    ) -> list[dict[str, Any]]:
+        """Calculate plate quantities (steel plates, panels)."""
+        quantities = []
+        area = _resolve_qty(qto, "GrossArea") or _resolve_qty(qto, "NetArea")
+        volume = _resolve_qty(qto, "GrossVolume") or _resolve_qty(qto, "NetVolume")
+        width = _normalize_unit(_resolve_qty(qto, "Width"), "Width")
+
+        if area:
+            quantities.append({"description": "Plate area", "quantity": area, "unit": "m2"})
+        if volume:
+            quantities.append({"description": "Plate volume", "quantity": volume, "unit": "m3"})
+        elif area and width:
+            volume = area * width
+            quantities.append({"description": "Plate volume", "quantity": volume, "unit": "m3"})
+
+        quantities.append({"description": "Plate count", "quantity": 1, "unit": "nr"})
+        return quantities
 
     def _calc_foundation(
         self, elem: dict, qto: dict, props: dict

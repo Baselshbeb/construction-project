@@ -58,5 +58,31 @@
   "glass": {
     "standard": 0.02,
     "description": "Very low waste - cut to order"
+  },
+  "railing": {
+    "standard": 0.03,
+    "complex": 0.05,
+    "description": "Railing waste from cutting and fitting"
+  },
+  "curtain_wall": {
+    "standard": 0.05,
+    "curved": 0.10,
+    "description": "Curtain wall framing and sealant waste"
+  },
+  "roofing": {
+    "tiles": 0.10,
+    "membrane": 0.08,
+    "metal_sheet": 0.05,
+    "description": "Roof covering waste from cutting and overlaps"
+  },
+  "cladding": {
+    "standard": 0.08,
+    "complex": 0.12,
+    "description": "External cladding cutting and fitting waste"
+  },
+  "structural_steel": {
+    "standard": 0.03,
+    "complex_fabrication": 0.07,
+    "description": "Steel member cutting and fabrication waste"
   }
 }

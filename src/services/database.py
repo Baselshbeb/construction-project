@@ -42,6 +42,35 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 """
 
+_CREATE_CORRECTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS corrections (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    item_no TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    element_type TEXT,
+    category TEXT,
+    created_at TEXT NOT NULL
+);
+"""
+
+_CREATE_LEARNED_OVERRIDES_SQL = """
+CREATE TABLE IF NOT EXISTS learned_overrides (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    element_type TEXT NOT NULL,
+    category TEXT,
+    field_name TEXT NOT NULL,
+    pattern TEXT,
+    override_value TEXT NOT NULL,
+    confidence REAL DEFAULT 0.5,
+    usage_count INTEGER DEFAULT 1,
+    last_used TEXT,
+    UNIQUE(element_type, category, field_name, pattern)
+);
+"""
+
 
 def _row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     """Convert a database row to a plain dict, deserializing JSON fields."""
@@ -66,6 +95,8 @@ class Database:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(_CREATE_TABLE_SQL)
+            await db.execute(_CREATE_CORRECTIONS_SQL)
+            await db.execute(_CREATE_LEARNED_OVERRIDES_SQL)
             await db.commit()
         logger.info("Database initialized at {}", self._db_path)
 
@@ -174,3 +205,165 @@ class Database:
         if deleted:
             logger.info("Deleted {} project(s) older than {} days", deleted, max_age_days)
         return deleted
+
+    # ---- Corrections & Learned Overrides ----
+
+    async def save_correction(self, correction_data: dict) -> None:
+        """Insert a user correction into the corrections table.
+
+        Args:
+            correction_data: Dict with keys: id, project_id, item_no,
+                field_name, old_value, new_value, element_type, category,
+                created_at.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO corrections
+                    (id, project_id, item_no, field_name, old_value,
+                     new_value, element_type, category, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    correction_data["id"],
+                    correction_data["project_id"],
+                    correction_data["item_no"],
+                    correction_data["field_name"],
+                    correction_data.get("old_value"),
+                    correction_data.get("new_value"),
+                    correction_data.get("element_type"),
+                    correction_data.get("category"),
+                    correction_data["created_at"],
+                ),
+            )
+            await db.commit()
+        logger.debug("Saved correction {} for project {}", correction_data["id"], correction_data["project_id"])
+
+    async def get_corrections_for_project(self, project_id: str) -> list[dict]:
+        """Return all corrections for a given project.
+
+        Args:
+            project_id: The project to fetch corrections for.
+
+        Returns:
+            List of correction dicts.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM corrections WHERE project_id = ? ORDER BY created_at",
+                (project_id,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def get_learned_overrides(
+        self, element_type: str, category: str | None = None
+    ) -> list[dict]:
+        """Return learned overrides for an element type and optional category.
+
+        Args:
+            element_type: IFC element type (e.g. IfcWall).
+            category: Optional category filter.
+
+        Returns:
+            List of override dicts.
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if category is not None:
+                query = (
+                    "SELECT * FROM learned_overrides "
+                    "WHERE element_type = ? AND category = ?"
+                )
+                params: tuple = (element_type, category)
+            else:
+                query = "SELECT * FROM learned_overrides WHERE element_type = ?"
+                params = (element_type,)
+            async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+
+    async def upsert_learned_override(
+        self,
+        element_type: str,
+        category: str | None,
+        field_name: str,
+        pattern: str | None,
+        override_value: str,
+        confidence: float,
+    ) -> None:
+        """Insert or update a learned override.
+
+        On conflict (element_type, category, field_name, pattern), updates
+        the override_value, confidence, usage_count, and last_used.
+
+        Args:
+            element_type: IFC element type.
+            category: Material / element category.
+            field_name: The BOQ field this override applies to.
+            pattern: Pattern key (material description or field name).
+            override_value: The corrected value to apply.
+            confidence: Computed confidence score.
+        """
+        now = datetime.utcnow().isoformat()
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO learned_overrides
+                    (element_type, category, field_name, pattern,
+                     override_value, confidence, usage_count, last_used)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+                ON CONFLICT(element_type, category, field_name, pattern)
+                DO UPDATE SET
+                    override_value = excluded.override_value,
+                    confidence = excluded.confidence,
+                    usage_count = usage_count + 1,
+                    last_used = excluded.last_used
+                """,
+                (element_type, category, field_name, pattern, override_value, confidence, now),
+            )
+            await db.commit()
+        logger.debug(
+            "Upserted override for {}/{}/{} confidence={:.2f}",
+            element_type, category, field_name, confidence,
+        )
+
+    async def boost_override_confidence(
+        self, project_id: str, boost: float = 0.1
+    ) -> None:
+        """Increase confidence for overrides related to corrections from a project.
+
+        Finds all corrections for the project, then boosts matching overrides
+        by the given amount (capped at 0.95).
+
+        Args:
+            project_id: The project whose related overrides should be boosted.
+            boost: Amount to increase confidence (default 0.1).
+        """
+        corrections = await self.get_corrections_for_project(project_id)
+        if not corrections:
+            logger.debug("No corrections found for project {} — nothing to boost", project_id)
+            return
+
+        async with aiosqlite.connect(self._db_path) as db:
+            for corr in corrections:
+                element_type = corr.get("element_type")
+                category = corr.get("category")
+                field_name = corr.get("field_name")
+                new_value = corr.get("new_value")
+                pattern = new_value if field_name == "description" else field_name
+
+                await db.execute(
+                    """
+                    UPDATE learned_overrides
+                    SET confidence = MIN(confidence + ?, 0.95)
+                    WHERE element_type = ?
+                      AND category = ?
+                      AND field_name = ?
+                      AND pattern = ?
+                    """,
+                    (boost, element_type, category, field_name, pattern),
+                )
+            await db.commit()
+        logger.info("Boosted override confidence for {} correction(s) in project {}", len(corrections), project_id)

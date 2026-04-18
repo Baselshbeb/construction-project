@@ -44,6 +44,16 @@ THIN_BORDER = Border(
     top=Side(style="thin", color="CCCCCC"),
     bottom=Side(style="thin", color="CCCCCC"),
 )
+CONFIDENCE_FILLS = {
+    "high": PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid"),
+    "medium": PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid"),
+    "low": PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"),
+}
+CONFIDENCE_FONTS = {
+    "high": Font(name="Calibri", size=9, color="006100"),
+    "medium": Font(name="Calibri", size=9, color="9C5700"),
+    "low": Font(name="Calibri", size=9, bold=True, color="9C0006"),
+}
 
 
 def _get_number_format(unit: str) -> str:
@@ -121,11 +131,12 @@ class ExportService:
         ws.column_dimensions["D"].width = 15
         ws.column_dimensions["E"].width = 15
         ws.column_dimensions["F"].width = 18
+        ws.column_dimensions["G"].width = 12
 
         row = 1
 
         # Title
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(row=row, column=1, value=labels["boq_title"])
         cell.font = TITLE_FONT
         cell.alignment = Alignment(horizontal="center")
@@ -136,20 +147,20 @@ class ExportService:
         building_name = boq_data.get("building_name", "")
         date_str = datetime.now().strftime("%Y-%m-%d")
 
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(row=row, column=1, value=f"{labels['project']}: {project_name}")
         cell.font = SUBTITLE_FONT
         cell.alignment = Alignment(horizontal="center")
         row += 1
 
         if building_name:
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
             cell = ws.cell(row=row, column=1, value=f"{labels['building']}: {building_name}")
             cell.font = SUBTITLE_FONT
             cell.alignment = Alignment(horizontal="center")
             row += 1
 
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(
             row=row, column=1,
             value=f"{labels['date']}: {date_str}  |  {labels['prepared_by']}: {boq_data.get('prepared_by', 'Metraj AI')}",
@@ -163,7 +174,7 @@ class ExportService:
         amount_label = f"{labels['amount']}" + (f" ({currency})" if currency else "")
         headers = [
             labels["item_no"], labels["description"], labels["unit"],
-            labels["quantity"], rate_label, amount_label,
+            labels["quantity"], rate_label, amount_label, "Confidence",
         ]
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=row, column=col, value=header)
@@ -182,7 +193,7 @@ class ExportService:
 
         for section in boq_data.get("sections", []):
             # Section header row
-            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
             cell = ws.cell(
                 row=row, column=1,
                 value=f"{section['section_no']}. {section['title']}",
@@ -190,7 +201,7 @@ class ExportService:
             cell.font = SECTION_FONT
             cell.fill = SECTION_FILL
             cell.border = THIN_BORDER
-            for col in range(2, 7):
+            for col in range(2, 8):
                 ws.cell(row=row, column=col).fill = SECTION_FILL
                 ws.cell(row=row, column=col).border = THIN_BORDER
             row += 1
@@ -218,13 +229,22 @@ class ExportService:
                 amount_cell.font = ITEM_FONT
                 amount_cell.number_format = "#,##0.00"
 
+                # Confidence column (G)
+                conf = item.get("confidence", {})
+                conf_level = conf.get("level", "medium") if conf else "medium"
+                conf_cell = ws.cell(row=row, column=7, value=conf_level.upper())
+                conf_cell.font = CONFIDENCE_FONTS.get(conf_level, ITEM_FONT)
+                conf_cell.fill = CONFIDENCE_FILLS.get(conf_level, PatternFill())
+                conf_cell.alignment = Alignment(horizontal="center", vertical="center")
+
                 # Borders and alignment
-                for col in range(1, 7):
+                for col in range(1, 8):
                     ws.cell(row=row, column=col).border = THIN_BORDER
-                    ws.cell(row=row, column=col).alignment = Alignment(
-                        horizontal="left" if col == 2 else "center",
-                        vertical="center",
-                    )
+                    if col < 7:
+                        ws.cell(row=row, column=col).alignment = Alignment(
+                            horizontal="left" if col == 2 else "center",
+                            vertical="center",
+                        )
 
                 section_item_rows.append(row)
                 row += 1
@@ -238,7 +258,7 @@ class ExportService:
                 )
                 subtotal_label_cell.font = TOTAL_FONT
                 subtotal_label_cell.fill = TOTAL_FILL
-                for col in range(1, 7):
+                for col in range(1, 8):
                     ws.cell(row=row, column=col).fill = TOTAL_FILL
                     ws.cell(row=row, column=col).border = THIN_BORDER
 
@@ -269,7 +289,7 @@ class ExportService:
             gt_label.font = GRAND_TOTAL_FONT
             gt_label.fill = GRAND_TOTAL_FILL
             gt_label.alignment = Alignment(horizontal="right")
-            for col in range(1, 7):
+            for col in range(1, 8):
                 ws.cell(row=row, column=col).fill = GRAND_TOTAL_FILL
                 ws.cell(row=row, column=col).border = THIN_BORDER
 
@@ -283,7 +303,7 @@ class ExportService:
             row += 2
 
         # Footer
-        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=7)
         cell = ws.cell(row=row, column=1, value=labels["footer"])
         cell.font = Font(name="Calibri", size=8, italic=True, color="999999")
         cell.alignment = Alignment(horizontal="center")

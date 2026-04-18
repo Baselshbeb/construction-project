@@ -71,6 +71,18 @@ class ParsedElement(BaseModel):
         description="Quantity sets (Qto) - e.g. {'Length': 5.0, 'Height': 3.0}",
     )
     materials: list[str] = Field(default_factory=list, description="Material names from IFC")
+    material_layers: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Material layers with thicknesses [{name, thickness_m, is_ventilated}]",
+    )
+    openings: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Per-wall openings from IfcRelVoidsElement [{opening_id, width, height, area}]",
+    )
+    quantity_source: str = Field(
+        default="qto",
+        description="Source of quantity data: 'qto', 'geometry', 'mixed', or 'none'",
+    )
     is_external: Optional[bool] = Field(default=None, description="Is this an external element?")
     category: Optional[ElementCategory] = Field(
         default=None, description="BOQ category (set by Classifier Agent)"

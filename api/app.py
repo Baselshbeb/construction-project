@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from src.agents.orchestrator import Orchestrator
 from src.models.project import ProcessingStatus
 from src.services.database import Database
+from src.services.learning_service import LearningService
 from src.utils.logger import get_logger
 
 logger = get_logger("api")
@@ -36,7 +37,7 @@ logger = get_logger("api")
 app = FastAPI(
     title="Metraj AI",
     description="AI-Powered Construction Material Estimation System",
-    version="0.5.0",
+    version="1.0.0",
 )
 
 # CORS - allow Next.js frontend
@@ -461,6 +462,82 @@ async def download_report(project_id: str, format: str):
         media_type=media_types.get(format, "application/octet-stream"),
         filename=file_path.name,
     )
+
+
+# ---------- BOQ Editing & Learning ----------
+
+
+@app.get("/api/projects/{project_id}/boq")
+async def get_boq(project_id: str):
+    """Get full BOQ data for a project (for frontend editing)."""
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    result = project.get("result", {})
+    return result.get("boq_data") or {}
+
+
+@app.patch("/api/projects/{project_id}/boq/items/{item_no}")
+async def update_boq_item(project_id: str, item_no: str, request: Request):
+    """Update a BOQ line item (user correction)."""
+    # Parse request body
+    updates = await request.json()
+
+    # Get project
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    result = project.get("result", {})
+    boq_data = result.get("boq_data")
+    if not boq_data:
+        raise HTTPException(400, "No BOQ data available")
+
+    # Find and update the item
+    updated_item = None
+    for section in boq_data.get("sections", []):
+        for item in section.get("items", []):
+            if item["item_no"] == item_no:
+                # Record corrections for each changed field
+                learning_svc = LearningService(db)
+                for field, new_value in updates.items():
+                    if field in ("quantity", "description", "unit", "waste_factor") and item.get(field) != new_value:
+                        await learning_svc.record_correction(
+                            project_id=project_id,
+                            item_no=item_no,
+                            field_name=field,
+                            old_value=str(item.get(field)),
+                            new_value=str(new_value),
+                            element_type=item.get("category", ""),
+                            category=item.get("category", ""),
+                        )
+                        item[field] = new_value
+                updated_item = item
+                break
+        if updated_item:
+            break
+
+    if not updated_item:
+        raise HTTPException(404, f"Item {item_no} not found")
+
+    # Save updated BOQ data back to database
+    result["boq_data"] = boq_data
+    await db.update_project(project_id, result=result)
+
+    return {"status": "updated", "item": updated_item}
+
+
+@app.post("/api/projects/{project_id}/boq/approve")
+async def approve_boq(project_id: str):
+    """Mark BOQ as user-approved, boosting learned override confidence."""
+    project = await db.get_project(project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    learning_svc = LearningService(db)
+    await learning_svc.approve_project_corrections(project_id)
+
+    return {"status": "approved", "project_id": project_id}
 
 
 # ---------- WebSocket ----------

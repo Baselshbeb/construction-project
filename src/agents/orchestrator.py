@@ -130,8 +130,21 @@ class Orchestrator(BaseAgent):
             ("Validation", self.validator),
         ]
 
+        # Track completed steps for checkpointing
+        completed_steps: list[str] = []
+        resume_from = state.get("_resume_from")
+
         for step_name, agent in pipeline:
+            # Skip already-completed steps if resuming
+            if resume_from and step_name != resume_from and step_name not in completed_steps:
+                if not completed_steps or pipeline.index((step_name, agent)) < next(
+                    (i for i, (n, _) in enumerate(pipeline) if n == resume_from), 0
+                ):
+                    self.log(f"Skipping {step_name} (resuming from {resume_from})")
+                    continue
+
             self.log(f"Step: {step_name}...")
+            resume_from = None  # Clear after reaching resume point
 
             try:
                 state = await agent.execute(state)
@@ -139,7 +152,10 @@ class Orchestrator(BaseAgent):
                 self.log_error(f"FAILED at {step_name}: {e}")
                 state["errors"].append(f"Pipeline failed at {step_name}: {e}")
                 state["status"] = ProcessingStatus.FAILED
+                state["_last_completed_step"] = completed_steps[-1] if completed_steps else None
                 break
+
+            completed_steps.append(step_name)
 
             # Check if previous step failed
             if state.get("status") == ProcessingStatus.FAILED:
@@ -153,6 +169,9 @@ class Orchestrator(BaseAgent):
                 state["errors"].append(gate_error)
                 state["status"] = ProcessingStatus.FAILED
                 break
+
+            # Checkpoint: record last successful step
+            state["_last_completed_step"] = step_name
 
         # Export reports only if pipeline completed successfully and BOQ was generated
         if state.get("boq_data") and state.get("status") == ProcessingStatus.COMPLETED:

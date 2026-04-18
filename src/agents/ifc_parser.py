@@ -21,6 +21,7 @@ from typing import Any
 
 from src.agents.base_agent import BaseAgent
 from src.models.project import BuildingInfo, ParsedElement, ProcessingStatus
+from src.services.geometry_service import GeometryService
 from src.services.ifc_service import IFCService
 
 
@@ -80,9 +81,22 @@ class IFCParserAgent(BaseAgent):
             f"{building_info.total_entities} entities"
         )
 
-        # Step 3: Extract all building elements
+        # Step 3: Initialize geometry service for 3D fallback
+        self.log("Initializing geometry engine...")
+        geo_service = GeometryService(service.model)
+
+        # Step 4: Extract all building elements (with geometry fallback)
         self.log("Extracting building elements...")
-        raw_elements, unknown_types = service.extract_all_elements()
+        raw_elements, unknown_types = service.extract_all_elements(
+            geometry_service=geo_service,
+        )
+
+        # Report geometry fallback stats
+        geo_failures = geo_service.failures
+        if geo_failures:
+            self.log_warning(
+                f"Geometry computation failed for {len(geo_failures)} element(s)"
+            )
 
         # Warn about unrecognized element types in the IFC file
         if unknown_types:

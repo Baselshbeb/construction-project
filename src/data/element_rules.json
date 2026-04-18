@@ -84,5 +84,170 @@
         {"name": "Window sill (marble/stone)", "unit": "m", "source": "Window sill length", "waste": "tiles.standard"}
       ]
     }
+  },
+
+  "IfcStair": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Stair volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Stair volume", "multiplier": 110, "waste": "reinforcement_steel.standard", "note": "~110 kg/m3 for stairs"},
+        {"name": "Formwork (stair)", "unit": "m2", "source": "Stair area", "multiplier": 2.5, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
+        {"name": "Anti-slip nosing", "unit": "nr", "source": "Stair count", "multiplier": 12, "waste_value": 0, "note": "~12 nosings per flight"},
+        {"name": "Handrail", "unit": "m", "source": "Stair area", "multiplier": 3.0, "waste_value": 0, "note": "~3m handrail per flight"}
+      ]
+    }
+  },
+
+  "IfcStairFlight": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Stair volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Stair volume", "multiplier": 120, "waste": "reinforcement_steel.standard", "note": "~120 kg/m3 for stair flights"},
+        {"name": "Formwork (stair flight)", "unit": "m2", "source": "Stair area", "multiplier": 2.5, "waste": "formwork.standard", "note": "Complex formwork: soffit + risers + sides"},
+        {"name": "Anti-slip nosing", "unit": "nr", "source": "Stair count", "multiplier": 12, "waste_value": 0, "note": "~12 nosings per flight"},
+        {"name": "Handrail", "unit": "m", "source": "Stair area", "multiplier": 3.0, "waste_value": 0, "note": "~3m handrail per flight"}
+      ]
+    }
+  },
+
+  "IfcRamp": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Ramp volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Ramp volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for ramps"},
+        {"name": "Formwork (ramp)", "unit": "m2", "source": "Ramp area", "multiplier": 1.5, "waste": "formwork.standard", "note": "Simpler formwork than stairs"},
+        {"name": "Non-slip surface treatment", "unit": "m2", "source": "Ramp area", "multiplier": 1.0, "waste_value": 0.05},
+        {"name": "Handrail", "unit": "m", "source": "Ramp area", "multiplier": 2.0, "waste_value": 0, "note": "Both sides of ramp"}
+      ]
+    }
+  },
+
+  "IfcRampFlight": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Ramp volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Ramp volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for ramp flights"},
+        {"name": "Formwork (ramp flight)", "unit": "m2", "source": "Ramp area", "multiplier": 1.5, "waste": "formwork.standard"},
+        {"name": "Non-slip surface treatment", "unit": "m2", "source": "Ramp area", "multiplier": 1.0, "waste_value": 0.05}
+      ]
+    }
+  },
+
+  "IfcRoof": {
+    "flat_roof": {
+      "condition": {"predefined_type": "FLAT_ROOF"},
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Roof volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Roof volume", "multiplier": 100, "waste": "reinforcement_steel.standard"},
+        {"name": "Waterproofing membrane", "unit": "m2", "source": "Roof area", "multiplier": 1.0, "waste": "waterproofing.standard"},
+        {"name": "Thermal insulation (roof)", "unit": "m2", "source": "Roof area", "multiplier": 1.0, "waste": "insulation.standard"},
+        {"name": "Screed (slope to drain)", "unit": "m2", "source": "Roof area", "multiplier": 1.0, "waste": "screed.standard"},
+        {"name": "Formwork (roof slab)", "unit": "m2", "source": "Roof area", "multiplier": 1.0, "waste": "formwork.standard"}
+      ]
+    },
+    "pitched_roof": {
+      "condition": {"predefined_type": "GABLE_ROOF"},
+      "materials": [
+        {"name": "Roof covering / tiles", "unit": "m2", "source": "Roof area", "multiplier": 1.15, "waste": "roofing.tiles", "note": "1.15x for slope factor"},
+        {"name": "Timber battens", "unit": "m", "source": "Roof area", "multiplier": 3.0, "waste": "timber.structural", "note": "~3.0 linear m per m2"},
+        {"name": "Thermal insulation (roof)", "unit": "m2", "source": "Roof area", "multiplier": 1.0, "waste": "insulation.standard"},
+        {"name": "Waterproofing underlayer", "unit": "m2", "source": "Roof area", "multiplier": 1.15, "waste": "waterproofing.standard"},
+        {"name": "Ridge tiles", "unit": "m", "source": "Roof area", "multiplier": 0.15, "waste": "roofing.tiles", "note": "Estimated ridge length per m2"}
+      ]
+    }
+  },
+
+  "IfcCovering": {
+    "flooring": {
+      "condition": {"predefined_type": "FLOORING"},
+      "materials": [
+        {"name": "Floor tiles / carpet", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste": "tiles.standard"},
+        {"name": "Tile adhesive / screed", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste": "screed.standard"}
+      ]
+    },
+    "ceiling": {
+      "condition": {"predefined_type": "CEILING"},
+      "materials": [
+        {"name": "Plasterboard / suspended ceiling panel", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste": "plaster.internal"},
+        {"name": "Ceiling framing (metal grid)", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste_value": 0.05}
+      ]
+    },
+    "cladding": {
+      "condition": {"predefined_type": "CLADDING"},
+      "materials": [
+        {"name": "External cladding panels", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste": "cladding.standard"},
+        {"name": "Cladding battens / sub-frame", "unit": "m", "source": "Covering area", "multiplier": 3.0, "waste": "timber.structural", "note": "~3 linear m per m2"},
+        {"name": "Insulation behind cladding", "unit": "m2", "source": "Covering area", "multiplier": 1.0, "waste": "insulation.standard"}
+      ]
+    }
+  },
+
+  "IfcCurtainWall": {
+    "standard": {
+      "materials": [
+        {"name": "Aluminum framing (curtain wall)", "unit": "kg", "source": "Curtain wall area", "multiplier": 6.0, "waste": "curtain_wall.standard", "note": "~6 kg/m2 aluminum framing"},
+        {"name": "Glass panels (double glazed)", "unit": "m2", "source": "Curtain wall area", "multiplier": 1.0, "waste": "glass.standard"},
+        {"name": "Structural sealant", "unit": "kg", "source": "Curtain wall area", "multiplier": 0.5, "waste": "curtain_wall.standard", "note": "~0.5 kg/m2"},
+        {"name": "Brackets and fixings", "unit": "nr", "source": "Curtain wall area", "multiplier": 2, "waste_value": 0, "note": "~2 nr/m2"}
+      ]
+    }
+  },
+
+  "IfcRailing": {
+    "standard": {
+      "materials": [
+        {"name": "Steel / aluminum railing", "unit": "kg", "source": "Railing length", "multiplier": 15.0, "waste": "railing.standard", "note": "~15 kg/m for metal railing"},
+        {"name": "Glass panels (railing infill)", "unit": "m2", "source": "Railing length", "multiplier": 0.8, "waste": "glass.standard", "note": "~0.8 m2 per linear m if glass infill"},
+        {"name": "Base plates / fixings", "unit": "nr", "source": "Railing length", "multiplier": 2, "waste_value": 0, "note": "~2 base plates per linear m"}
+      ]
+    }
+  },
+
+  "IfcFooting": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C30/37", "unit": "m3", "source": "Footing volume", "multiplier": 1.0, "waste": "concrete.foundation"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Footing volume", "multiplier": 90, "waste": "reinforcement_steel.standard", "note": "~90 kg/m3 for footings"},
+        {"name": "Formwork (footing)", "unit": "m2", "source": "Footing surface area", "multiplier": 1.0, "waste": "formwork.standard"},
+        {"name": "Blinding concrete (50mm)", "unit": "m2", "source": "Footing area (base)", "multiplier": 1.0, "waste": "concrete.standard"}
+      ]
+    }
+  },
+
+  "IfcPile": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete C35/45", "unit": "m3", "source": "Pile volume", "multiplier": 1.0, "waste": "concrete.foundation"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Pile volume", "multiplier": 100, "waste": "reinforcement_steel.standard", "note": "~100 kg/m3 for piles"},
+        {"name": "Pile cap concrete", "unit": "m3", "source": "Pile count", "multiplier": 0.5, "waste": "concrete.foundation", "note": "~0.5 m3 per pile cap"}
+      ]
+    }
+  },
+
+  "IfcBuildingElementProxy": {
+    "standard": {
+      "materials": [
+        {"name": "Concrete (generic element)", "unit": "m3", "source": "Element volume", "multiplier": 1.0, "waste": "concrete.standard"},
+        {"name": "Reinforcement steel", "unit": "kg", "source": "Element volume", "multiplier": 80, "waste": "reinforcement_steel.standard", "note": "~80 kg/m3 generic estimate"}
+      ]
+    }
+  },
+
+  "IfcMember": {
+    "standard": {
+      "materials": [
+        {"name": "Structural steel member", "unit": "kg", "source": "Member volume", "multiplier": 7850, "waste": "structural_steel.standard", "note": "Steel density 7850 kg/m3"},
+        {"name": "Fire protection coating", "unit": "m2", "source": "Member surface area", "multiplier": 1.0, "waste_value": 0.05, "note": "Applied if fire rating required"}
+      ]
+    }
+  },
+
+  "IfcPlate": {
+    "standard": {
+      "materials": [
+        {"name": "Steel plate", "unit": "kg", "source": "Plate area", "multiplier": 78.5, "waste": "structural_steel.standard", "note": "Typical 10mm plate = 78.5 kg/m2"},
+        {"name": "Surface treatment / primer", "unit": "m2", "source": "Plate area", "multiplier": 2.0, "waste": "paint.standard", "note": "Both faces"}
+      ]
+    }
   }
 }

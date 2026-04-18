@@ -16,7 +16,9 @@ from __future__ import annotations
 from typing import Any
 
 from src.agents.base_agent import BaseAgent
+from src.models.confidence import ConfidenceScore
 from src.models.project import ElementCategory, ProcessingStatus
+from src.services.confidence_service import ConfidenceService
 from src.translations.strings import get_boq_sections
 
 
@@ -140,6 +142,33 @@ class BOQGeneratorAgent(BaseAgent):
             project_name = building_info.get("project_name") or project_name
             building_name = building_info.get("building_name")
 
+        # --- Confidence scoring ---
+        confidence_svc = ConfidenceService()
+        elements = state.get("parsed_elements", [])
+
+        # Score each source element
+        element_scores: dict[int, dict] = {}
+        for elem in elements:
+            calc_data = {}  # Calculator data not needed for element-level scoring
+            elem_score = confidence_svc.score_element_quantities(elem, calc_data)
+            element_scores[elem["ifc_id"]] = elem_score
+
+        # Score each BOQ line item and collect scores for summary
+        all_item_scores: list[ConfidenceScore] = []
+        for section in sections:
+            for item in section.get("items", []):
+                item_confidence = confidence_svc.score_boq_item(item, element_scores)
+                item["confidence"] = item_confidence.model_dump()
+                all_item_scores.append(item_confidence)
+
+        confidence_summary = confidence_svc.generate_summary(all_item_scores)
+        self.log(
+            f"Confidence: {confidence_summary['high_count']} HIGH, "
+            f"{confidence_summary['medium_count']} MEDIUM, "
+            f"{confidence_summary['low_count']} LOW "
+            f"(overall: {confidence_summary['overall_score']:.0%})"
+        )
+
         boq_data = {
             "project_name": project_name,
             "building_name": building_name,
@@ -148,6 +177,7 @@ class BOQGeneratorAgent(BaseAgent):
             "total_line_items": sum(len(s["items"]) for s in sections),
             "total_sections": len(sections),
             "grand_total": None,
+            "confidence_summary": confidence_summary,
         }
 
         state["boq_data"] = boq_data
@@ -158,7 +188,8 @@ class BOQGeneratorAgent(BaseAgent):
         )
         state["processing_log"].append(
             f"BOQ Generator: {boq_data['total_sections']} sections, "
-            f"{boq_data['total_line_items']} line items"
+            f"{boq_data['total_line_items']} line items, "
+            f"confidence: {confidence_summary['overall_level']}"
         )
 
         return state

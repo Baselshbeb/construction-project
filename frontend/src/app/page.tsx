@@ -36,12 +36,30 @@ interface Material {
   category: string;
 }
 
+interface ConfidenceData {
+  level: "high" | "medium" | "low";
+  score: number;
+  factors: string[];
+  review_needed: boolean;
+}
+
+interface ConfidenceSummary {
+  high_count: number;
+  medium_count: number;
+  low_count: number;
+  total_items: number;
+  review_needed_count: number;
+  overall_score: number;
+  overall_level: string;
+}
+
 interface BOQData {
   project_name: string;
   building_name: string | null;
   sections: BOQSection[];
   total_line_items: number;
   total_sections: number;
+  confidence_summary?: ConfidenceSummary;
 }
 
 interface BOQSection {
@@ -57,6 +75,9 @@ interface BOQItem {
   quantity: number;
   rate: number | null;
   amount: number | null;
+  confidence?: ConfidenceData;
+  base_quantity?: number;
+  waste_factor?: number;
 }
 
 interface ValidationReport {
@@ -472,6 +493,29 @@ export default function Home() {
               />
             </div>
 
+            {/* Confidence summary */}
+            {result.boq_data?.confidence_summary && (
+              <div className="flex gap-3 mb-6 text-sm">
+                <span className="px-3 py-1 rounded-full bg-green-100 text-green-800 font-medium">
+                  HIGH: {result.boq_data.confidence_summary.high_count}
+                </span>
+                <span className="px-3 py-1 rounded-full bg-yellow-100 text-yellow-800 font-medium">
+                  MEDIUM: {result.boq_data.confidence_summary.medium_count}
+                </span>
+                <span className="px-3 py-1 rounded-full bg-red-100 text-red-800 font-medium">
+                  LOW: {result.boq_data.confidence_summary.low_count}
+                </span>
+                <span className="px-3 py-1 rounded-full bg-gray-100 text-gray-600">
+                  Overall: {Math.round((result.boq_data.confidence_summary.overall_score || 0) * 100)}%
+                </span>
+                {result.boq_data.confidence_summary.review_needed_count > 0 && (
+                  <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-700 font-medium">
+                    {result.boq_data.confidence_summary.review_needed_count} items need review
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Download buttons */}
             <div className="flex flex-wrap gap-3 mb-8">
               <button
@@ -531,6 +575,7 @@ export default function Home() {
                         <th className="px-4 py-3 text-start">{t("boq.description")}</th>
                         <th className="px-4 py-3 text-center w-16">{t("boq.unit")}</th>
                         <th className="px-4 py-3 text-end w-28">{t("boq.quantity")}</th>
+                        <th className="px-4 py-3 text-center w-24">Confidence</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -633,13 +678,19 @@ function SummaryCard({
   );
 }
 
+const CONFIDENCE_STYLES: Record<string, string> = {
+  high: "bg-green-100 text-green-800",
+  medium: "bg-yellow-100 text-yellow-800",
+  low: "bg-red-100 text-red-800",
+};
+
 function SectionRows({ section }: { section: BOQSection }) {
   return (
     <>
       {/* Section header */}
       <tr style={{ backgroundColor: "var(--primary-light)" }}>
         <td
-          colSpan={4}
+          colSpan={5}
           className="px-4 py-2 font-bold"
           style={{ color: "var(--primary)" }}
         >
@@ -647,19 +698,30 @@ function SectionRows({ section }: { section: BOQSection }) {
         </td>
       </tr>
       {/* Items */}
-      {section.items.map((item) => (
-        <tr key={item.item_no} className="border-b border-gray-100 hover:bg-gray-50">
-          <td className="px-4 py-2 text-gray-500">{item.item_no}</td>
-          <td className="px-4 py-2">{item.description}</td>
-          <td className="px-4 py-2 text-center text-gray-500">{item.unit}</td>
-          <td className="px-4 py-2 text-end font-mono">
-            {item.quantity.toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
-          </td>
-        </tr>
-      ))}
+      {section.items.map((item) => {
+        const confLevel = item.confidence?.level || "medium";
+        return (
+          <tr key={item.item_no} className="border-b border-gray-100 hover:bg-gray-50">
+            <td className="px-4 py-2 text-gray-500">{item.item_no}</td>
+            <td className="px-4 py-2">{item.description}</td>
+            <td className="px-4 py-2 text-center text-gray-500">{item.unit}</td>
+            <td className="px-4 py-2 text-end font-mono">
+              {item.quantity.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </td>
+            <td className="px-4 py-2 text-center">
+              <span
+                className={`px-2 py-0.5 rounded-full text-xs font-medium ${CONFIDENCE_STYLES[confLevel]}`}
+                title={item.confidence?.factors?.join(", ") || ""}
+              >
+                {confLevel.toUpperCase()}
+              </span>
+            </td>
+          </tr>
+        );
+      })}
     </>
   );
 }
